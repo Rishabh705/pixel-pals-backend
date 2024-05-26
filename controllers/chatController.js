@@ -1,8 +1,10 @@
+const Chat = require('../model/Chat');
 const IndividualChat = require('../model/IndividualChat');
 const GroupChat = require('../model/GroupChat');
 const User = require('../model/User');
 const Message = require('../model/Message');
 
+// Create a one-on-one chat
 const createOneOnOneChat = async (req, res) => {
     try {
         const { receiverID, message } = req.body;
@@ -13,24 +15,29 @@ const createOneOnOneChat = async (req, res) => {
             return res.status(404).json({ message: 'Receiver does not exist' });
         }
 
-        const newChat = await IndividualChat.create({
+        const newIndividualChat = await IndividualChat.create({
             participants: [senderID, receiverID],
         });
 
-        const newMessage = await Message.create({ 
-            message, 
-            sender: senderID, 
-            chat: newChat._id,
+        const newMessage = await Message.create({
+            message,
+            sender: senderID,
+            chat: newIndividualChat._id,
             chatModel: 'IndividualChat'
         });
 
-        newChat.messages.push(newMessage._id);
-        newChat.lastMessage = newMessage._id;
-        await newChat.save();
+        newIndividualChat.messages.push(newMessage._id);
+        newIndividualChat.lastMessage = newMessage._id;
+        await newIndividualChat.save();
+
+        const newChat = await Chat.create({
+            type: 'IndividualChat',
+            chat: newIndividualChat._id
+        });
 
         await User.updateMany(
             { _id: { $in: [senderID, receiverID] } },
-            { $push: { individualChats: newChat._id } }
+            { $push: { chats: newChat._id } }
         );
 
         res.status(201).json({
@@ -53,7 +60,7 @@ const createGroupChat = async (req, res) => {
             members.push(senderID.toString());
         }
 
-        const newChat = await GroupChat.create({
+        const newGroupChat = await GroupChat.create({
             name,
             description,
             owner: senderID,
@@ -61,20 +68,25 @@ const createGroupChat = async (req, res) => {
             members,
         });
 
-        const newMessage = await Message.create({ 
-            message, 
-            sender: senderID, 
-            chat: newChat._id,
+        const newMessage = await Message.create({
+            message,
+            sender: senderID,
+            chat: newGroupChat._id,
             chatModel: 'GroupChat'
         });
 
-        newChat.messages.push(newMessage._id);
-        newChat.lastMessage = newMessage._id;
-        await newChat.save();
+        newGroupChat.messages.push(newMessage._id);
+        newGroupChat.lastMessage = newMessage._id;
+        await newGroupChat.save();
+
+        const newChat = await Chat.create({
+            type: 'GroupChat',
+            chat: newGroupChat._id
+        });
 
         await User.updateMany(
             { _id: { $in: members } },
-            { $push: { groupChats: newChat._id } }
+            { $push: { chats: newChat._id } }
         );
 
         res.status(201).json({
@@ -91,77 +103,80 @@ const getChats = async (req, res) => {
     try {
         const { userID } = req.query;
 
-        const foundUser = await User.findById(userID)
+        // First populate IndividualChat type
+        const foundUserWithIndividualChats = await User.findById(userID)
             .populate({
-                path: 'individualChats',
-                populate: [
-                    { path: 'lastMessage' },
-                    {
-                        path: 'participants',
-                        select: 'username',
-                    },
-                ],
-            })
-            .populate({
-                path: 'groupChats',
-                populate: [
-                    { path: 'lastMessage' },
-                    {
-                        path: 'members',
-                        select: 'username',
-                    },
-                ],
+                path: 'chats',
+                populate: {
+                    path: 'chat',
+                    model: 'IndividualChat',
+                    populate: [
+                        { path: 'lastMessage', populate: { path: 'sender', select: 'username' } },
+                        { path: 'participants', select: 'username'}
+                    ],
+                },
             })
             .exec();
 
-        if (!foundUser) {
+        // Then populate GroupChat type
+        const foundUserWithGroupChats = await User.findById(userID)
+            .populate({
+                path: 'chats',
+                populate: {
+                    path: 'chat',
+                    model: 'GroupChat',
+                    populate: [
+                        { path: 'lastMessage', populate: { path: 'sender', select: 'username' } },
+                    ],
+                },
+            })
+            .exec();
+
+        if (!foundUserWithIndividualChats || !foundUserWithGroupChats) {
             return res.status(404).json({ message: 'No such user exists' });
         }
 
+        // Combine the populated results from both queries
+        const combinedChats = {
+            individualChats: foundUserWithIndividualChats.chats.filter(chat => chat.type === 'IndividualChat'),
+            groupChats: foundUserWithGroupChats.chats.filter(chat => chat.type === 'GroupChat'),
+        };
+
         res.status(200).json({
             message: 'User chats retrieved successfully',
-            data: { individualChats: foundUser.individualChats, groupChats: foundUser.groupChats },
+            data: combinedChats,
         });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
 };
 
+
 // Get a single chat
 const getChat = async (req, res) => {
     try {
-        const { id, type } = req.params;
-        let chat;
+        const { id } = req.params;
 
-        if (type === 'individual') {
-            chat = await IndividualChat.findById(id)
-                .populate({
-                    path: 'messages',
-                    populate: {
-                        path: 'sender',
-                        select: 'username',
-                    }
-                })
-                .exec();
-        } else if (type === 'group') {
-            chat = await GroupChat.findById(id)
-                .populate({
-                    path: 'messages',
-                    populate: {
-                        path: 'sender',
-                        select: 'username',
-                    }
-                })
-                .exec();
-        }
+        const chat = await Chat.findById(id)
+        .populate({
+            path: 'chat',
+            populate: {
+                path: 'messages',
+                populate: {
+                    path: 'sender',
+                    select: 'username',
+                },
+            },
+        })
+        .exec();
 
         if (!chat) {
             return res.status(404).json({ message: 'No chat with the given ID exists' });
         }
-
+        
         res.status(200).json({
             message: 'Chat retrieved successfully',
-            data: chat.messages
+            data: chat,
         });
     } catch (err) {
         res.status(500).json({ message: err.message });

@@ -13,13 +13,8 @@ const messageSchema = new mongoose.Schema({
     },
     chat: {
         type: Schema.Types.ObjectId,
-        refPath: 'chatModel',
+        ref: 'Chat',
         required: true,
-    },
-    chatModel: {
-        type: String,
-        required: true,
-        enum: ['IndividualChat', 'GroupChat']
     },
 }, { timestamps: true });
 

@@ -15,22 +15,15 @@ const userSchema = new Schema({
         type: String,
         default: 'https://github.com/shadcn.png',
     },
-    individualChats: [
+    chats: [
         {
             type: Schema.Types.ObjectId,
-            ref: 'IndividualChat',
-        }
-    ],
-    groupChats: [
-        {
-            type: Schema.Types.ObjectId,
-            ref: 'GroupChat',
+            ref: 'Chat',
         }
     ],
     refreshToken: {
-        type:String,
+        type: String,
     },
-    
 }, { timestamps: true });
 
 const User = mongoose.model('User', userSchema);

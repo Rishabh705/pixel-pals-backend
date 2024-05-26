@@ -1,10 +1,10 @@
-# Chat Application
+# Pixel Pals
 
 This is a chat application built using Node.js, Express, and MongoDB. It supports both individual (one-on-one) and group chats. The application includes user authentication with JWT and bcrypt.
 
 ## Table of Contents
 
-- [Chat Application](#chat-application)
+- [Pixel Pals](#pixel-pals)
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
   - [Installation](#installation)
@@ -12,9 +12,9 @@ This is a chat application built using Node.js, Express, and MongoDB. It support
   - [API Endpoints](#api-endpoints)
     - [Authentication](#authentication)
     - [Chats](#chats)
-    - [Messages](#messages)
   - [Models](#models)
     - [User](#user)
+    - [Chat](#chat)
     - [IndividualChat](#individualchat)
     - [GroupChat](#groupchat)
     - [Message](#message)
@@ -67,7 +67,6 @@ This is a chat application built using Node.js, Express, and MongoDB. It support
 
 - Register a new user
 - Login to get the JWT token
-- Use the token to access protected routes
 - Create one-on-one or group chats
 - Send and receive messages
 
@@ -106,7 +105,7 @@ This is a chat application built using Node.js, Express, and MongoDB. It support
 - **Logout**
 
     ```http
-    POST /api/auth/logout
+    GET /api/auth/logout
     ```
 
 ### Chats
@@ -167,14 +166,6 @@ This is a chat application built using Node.js, Express, and MongoDB. It support
     }
     ```
 
-### Messages
-
-- **Get all messages in a chat**
-
-    ```http
-    GET /api/messages/:chatID
-    ```
-
 ## Models
 
 ### User
@@ -199,16 +190,10 @@ This is a chat application built using Node.js, Express, and MongoDB. It support
             type: String,
             default: 'https://github.com/shadcn.png',
         },
-        individualChats: [
+        chats: [
             {
                 type: Schema.Types.ObjectId,
-                ref: 'IndividualChat',
-            }
-        ],
-        groupChats: [
-            {
-                type: Schema.Types.ObjectId,
-                ref: 'GroupChat',
+                ref: 'Chat',
             }
         ],
         refreshToken: {
@@ -220,7 +205,30 @@ This is a chat application built using Node.js, Express, and MongoDB. It support
 
     module.exports = User;
     ```
+### Chat
 
+- **Schema**
+  ```javascript
+    const mongoose = require('mongoose');
+    const { Schema } = mongoose;
+
+    const chatSchema = new mongoose.Schema({
+    type: {
+        type: String,
+        enum: ['IndividualChat', 'GroupChat'],
+        required: true,
+    },
+    chat: {
+        type: mongoose.Schema.Types.ObjectId,
+        refPath: 'type',
+        required: true,
+    },
+    }, { timestamps: true });
+
+    const Chat = mongoose.model('Chat', chatSchema);
+
+    module.exports = Chat;
+  ```
 ### IndividualChat
 
 - **Schema**
@@ -298,8 +306,8 @@ This is a chat application built using Node.js, Express, and MongoDB. It support
         ],
         lastMessage: {
             type: Schema.Types.ObjectId,
-                ref: 'Message',
-            },
+            ref: 'Message',
+        },
     }, { timestamps: true });
 
     const GroupChat = mongoose.model('GroupChat', groupChatSchema);
@@ -327,13 +335,8 @@ This is a chat application built using Node.js, Express, and MongoDB. It support
         },
         chat: {
             type: Schema.Types.ObjectId,
-            refPath: 'chatModel',
+            ref: 'Chat',
             required: true,
-        },
-        chatModel: {
-            type: String,
-            required: true,
-            enum: ['IndividualChat', 'GroupChat']
         },
     }, { timestamps: true });
 
