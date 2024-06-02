@@ -7,7 +7,7 @@ const Message = require('../model/Message');
 // Create a one-on-one chat
 const createOneOnOneChat = async (req, res) => {
     try {
-        const { receiverID, message } = req.body;
+        const { receiverID } = req.body;
         const senderID = req.user._id;
 
         const receiver = await User.findById(receiverID).exec();
@@ -15,25 +15,32 @@ const createOneOnOneChat = async (req, res) => {
             return res.status(404).json({ message: 'Receiver does not exist' });
         }
 
+        // Check if a chat already exists between the two users
+        const existingChat = await Chat.findOne({
+            type: 'IndividualChat',
+        }).populate({
+            path: 'chat',
+            'chat.participants': { $all: [senderID, receiverID] }
+        }).exec();
+
+        if (existingChat) {
+            return res.status(200).json({
+                message: 'Chat already exists',
+                data: existingChat,
+            });
+        }
+
         const newIndividualChat = await IndividualChat.create({
             participants: [senderID, receiverID],
         });
 
-        const newMessage = await Message.create({
-            message,
-            sender: senderID,
-            chat: newIndividualChat._id,
-            chatModel: 'IndividualChat'
-        });
-
-        newIndividualChat.messages.push(newMessage._id);
-        newIndividualChat.lastMessage = newMessage._id;
         await newIndividualChat.save();
 
         const newChat = await Chat.create({
             type: 'IndividualChat',
             chat: newIndividualChat._id
         });
+
 
         await User.updateMany(
             { _id: { $in: [senderID, receiverID] } },
@@ -42,7 +49,7 @@ const createOneOnOneChat = async (req, res) => {
 
         res.status(201).json({
             message: 'One-on-one chat created successfully',
-            data: { chat: newChat }
+            data: newChat
         });
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -68,15 +75,6 @@ const createGroupChat = async (req, res) => {
             members,
         });
 
-        const newMessage = await Message.create({
-            message,
-            sender: senderID,
-            chat: newGroupChat._id,
-            chatModel: 'GroupChat'
-        });
-
-        newGroupChat.messages.push(newMessage._id);
-        newGroupChat.lastMessage = newMessage._id;
         await newGroupChat.save();
 
         const newChat = await Chat.create({
@@ -112,7 +110,7 @@ const getChats = async (req, res) => {
                     model: 'IndividualChat',
                     populate: [
                         { path: 'lastMessage', populate: { path: 'sender', select: 'username' } },
-                        { path: 'participants', select: 'username'}
+                        { path: 'participants', select: 'username' }
                     ],
                 },
             })
@@ -158,22 +156,29 @@ const getChat = async (req, res) => {
         const { id } = req.params;
 
         const chat = await Chat.findById(id)
-        .populate({
-            path: 'chat',
-            populate: {
-                path: 'messages',
-                populate: {
-                    path: 'sender',
-                    select: 'username',
-                },
-            },
-        })
-        .exec();
+            .populate({
+                path: 'chat',
+                populate: [
+                    {
+                        path: 'messages',
+                        populate: {
+                            path: 'sender',
+                            select: 'username avatar',
+                        },
+                    },
+                    {
+                        path: 'participants',
+                        select: 'username avatar',
+                    },
+
+                ],
+            })
+            .exec();
 
         if (!chat) {
             return res.status(404).json({ message: 'No chat with the given ID exists' });
         }
-        
+
         res.status(200).json({
             message: 'Chat retrieved successfully',
             data: chat,
@@ -186,37 +191,47 @@ const getChat = async (req, res) => {
 // Update a chat with a new message
 const updateChat = async (req, res) => {
     try {
-        const { message, chatID, type } = req.body;
+        const { id } = req.params;
+        const { message } = req.body;
         const senderID = req.user._id;
 
-        let chat;
-
-        if (type === 'individual') {
-            chat = await IndividualChat.findById(chatID).exec();
-        } else if (type === 'group') {
-            chat = await GroupChat.findById(chatID).exec();
-        }
-
+        // Find the chat by ID
+        const chat = await Chat.findById(id).exec();
         if (!chat) {
             return res.status(404).json({ message: 'Chat does not exist' });
         }
 
+        // Create a new message
         const newMessage = await Message.create({
             message,
             sender: senderID,
             chat: chat._id,
-            chatModel: type === 'individual' ? 'IndividualChat' : 'GroupChat'
         });
 
-        chat.messages.push(newMessage._id);
-        chat.lastMessage = newMessage._id;
-        await chat.save();
+        // Update the detailed chat model
+        let chatDetails;
+        if (chat.type === 'IndividualChat') {
+            chatDetails = await IndividualChat.findById(chat.chat).exec();
+        } else if (chat.type === 'GroupChat') {
+            chatDetails = await GroupChat.findById(chat.chat).exec();
+        }
 
-        res.status(201).json({ message: 'Chat updated successfully' });
+        if (!chatDetails) {
+            return res.status(404).json({ message: 'Chat details not found' });
+        }
+
+        // Push the new message to the chat
+        chatDetails.messages.push(newMessage._id);
+        chatDetails.lastMessage = newMessage._id;
+
+        await chatDetails.save();
+
+        res.status(201).json({ message: 'Chat updated successfully', newMessage });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
 };
+
 
 module.exports = {
     createOneOnOneChat,

@@ -1,5 +1,5 @@
 //list that cors won't prevent from accessing our server
-const whitelist = ['http://127.0.0.1:5173','http://127.0.0.1:3500', 'http://localhost:5173']
+const whitelist = process.env.CORS_WHITELIST ? process.env.CORS_WHITELIST.split(',') : [];
 const corsOptions = {
     origin:(origin, callback) =>{
         //if domain is in whitelist then let it pass

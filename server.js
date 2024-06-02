@@ -14,25 +14,34 @@ const app = express()
 
 //connect to mongo
 connectDB()
-
+  
 //don't listen if mongo connection fails
-mongoose.connection.once('open', ()=>{
-    console.log('Connected to MONGO and ready to listen')
-    const expressServer = app.listen(PORT, ()=> console.log(`Server running on port ${PORT}`))
-    const io = new Server(expressServer,{
-        cors:{
-            origin: process.env.WHITELIST,
-        }
-    })
-    io.on('connection', socket => {
-        console.log(`User ${socket.id} connected`)
-    
-        socket.on('message', data => {
-            console.log(data)
-            io.emit('message', `${socket.id.substring(0, 5)}: ${data}`)
-        })
-    })
-})
+mongoose.connection.once('open', () => {
+    console.log('Connected to MongoDB and ready to listen');
+    const expressServer = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+    const io = new Server(expressServer, {
+        cors: {
+            origin: process.env.CORS_WHITELIST ? process.env.CORS_WHITELIST.split(',') : [] 
+        },
+     });
+ 
+    io.on('connection', (socket) => {
+        console.log(`User ${socket.id} connected`);
+
+        //message came from client
+        socket.on('send-message', (data) => {
+            console.log(data);
+            //add it to database and send it to reciever          
+            socket.broadcast.emit('receive-message', data);
+        });
+
+        socket.on('disconnect', () => {
+            console.log(`User ${socket.id} disconnected`);
+        });
+    });
+});
+
 //custom middlewares
 app.use(logger)
 
@@ -54,6 +63,7 @@ app.use('/refresh', require('./routes/refresh'))
 
 app.use(verifyJWT)
 app.use('/api/chats',require('./routes/api/chats'))
+app.use('/api/contacts',require('./routes/api/contacts'))
 
 //Error page
 app.get('/*', (req, res) => {
