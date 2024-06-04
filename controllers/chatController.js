@@ -9,7 +9,7 @@ const createOneOnOneChat = async (req, res) => {
     try {
         const { receiverID } = req.body;
         const senderID = req.user._id;
-
+        console.log(senderID, receiverID);
         const receiver = await User.findById(receiverID).exec();
         if (!receiver) {
             return res.status(404).json({ message: 'Receiver does not exist' });
@@ -18,12 +18,15 @@ const createOneOnOneChat = async (req, res) => {
         // Check if a chat already exists between the two users
         const existingChat = await Chat.findOne({
             type: 'IndividualChat',
-        }).populate({
-            path: 'chat',
-            'chat.participants': { $all: [senderID, receiverID] }
-        }).exec();
+            chat: {
+              $in: await IndividualChat.find({
+                participants: { $all: [senderID, receiverID] }
+              }).distinct('_id')
+            }
+          }).exec();
 
         if (existingChat) {
+            console.log(existingChat);
             return res.status(200).json({
                 message: 'Chat already exists',
                 data: existingChat,
@@ -211,7 +214,9 @@ const updateChat = async (req, res) => {
         // Update the detailed chat model
         let chatDetails;
         if (chat.type === 'IndividualChat') {
-            chatDetails = await IndividualChat.findById(chat.chat).exec();
+            chatDetails = await IndividualChat.findById(chat.chat)
+            .populate({path:'participants', select: 'username avatar'})
+            .exec();
         } else if (chat.type === 'GroupChat') {
             chatDetails = await GroupChat.findById(chat.chat).exec();
         }
@@ -226,7 +231,15 @@ const updateChat = async (req, res) => {
 
         await chatDetails.save();
 
-        res.status(201).json({ message: 'Chat updated successfully', newMessage });
+        // Add receiver information to the new message
+        let newMessageWithReceiver = newMessage.toObject();
+        if (chat.type === 'IndividualChat') {
+            const receiver = chatDetails.participants.find(participant => participant._id.toString() !== senderID.toString());
+            newMessageWithReceiver.receiver = receiver;
+        }
+
+
+        res.status(201).json({ message: 'Chat updated successfully', newMessage: newMessageWithReceiver});
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
