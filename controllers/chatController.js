@@ -9,7 +9,6 @@ const createOneOnOneChat = async (req, res) => {
     try {
         const { receiverID } = req.body;
         const senderID = req.user._id;
-        console.log(senderID, receiverID);
         const receiver = await User.findById(receiverID).exec();
         if (!receiver) {
             return res.status(404).json({ message: 'Receiver does not exist' });
@@ -26,7 +25,6 @@ const createOneOnOneChat = async (req, res) => {
           }).exec();
 
         if (existingChat) {
-            console.log(existingChat);
             return res.status(200).json({
                 message: 'Chat already exists',
                 data: existingChat,
