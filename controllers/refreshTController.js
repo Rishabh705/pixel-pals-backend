@@ -8,7 +8,14 @@ const handleRefreshToken = async (req, res) => {
     
     const refreshToken = cookies.jwt;
 
-    const foundUser = await User.findOne({ refreshToken }).exec();
+    const query1 ={
+        text:"SELECT * FROM users WHERE refreshToken = $1",
+        values: [refreshToken]
+    };
+
+    const response = await pool.query(query1);
+    const foundUser = response.rows[0];
+    
     if (!foundUser) return res.sendStatus(403); //Forbidden
 
     // evaluate jwt 

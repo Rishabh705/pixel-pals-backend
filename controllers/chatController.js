@@ -1,66 +1,95 @@
-const Chat = require('../model/Chat');
-const IndividualChat = require('../model/IndividualChat');
-const GroupChat = require('../model/GroupChat');
-const User = require('../model/User');
-const Message = require('../model/Message');
+const pool = require('../config/psqldb');
 
 // Create a one-on-one chat
 const createOneOnOneChat = async (req, res) => {
+    const client = await pool.connect();
     try {
+        await client.query('BEGIN'); // Start the transaction
+
         const { receiverID } = req.body;
         const senderID = req.user._id;
-        const receiver = await User.findById(receiverID).exec();
+
+        // Check if the receiver exists
+        const query1 = {
+            text: "SELECT * FROM Users WHERE _id = $1",
+            values: [receiverID]
+        };
+
+        const response = await client.query(query1);
+        const receiver = response.rows[0];
+
         if (!receiver) {
+            await client.query('ROLLBACK'); // Rollback if receiver doesn't exist
             return res.status(404).json({ message: 'Receiver does not exist' });
         }
 
         // Check if a chat already exists between the two users
-        const existingChat = await Chat.findOne({
-            type: 'IndividualChat',
-            chat: {
-              $in: await IndividualChat.find({
-                participants: { $all: [senderID, receiverID] }
-              }).distinct('_id')
-            }
-          }).exec();
+        const query2 = {
+            text: `
+                SELECT *
+                FROM IndividualChats
+                WHERE  (participant1 = $1 AND participant2 = $2) OR
+                       (participant1 = $2 AND participant2 = $1)
+            `,
+            values: [senderID, receiverID]
+        };
+
+        const existingChatResponse = await client.query(query2);
+        const existingChat = existingChatResponse.rows[0];
 
         if (existingChat) {
+            await client.query('ROLLBACK'); // Rollback if chat already exists
             return res.status(200).json({
                 message: 'Chat already exists',
                 data: existingChat,
             });
         }
 
-        const newIndividualChat = await IndividualChat.create({
-            participants: [senderID, receiverID],
-        });
+        // Create a new individual chat
+        const query3 = {
+            text: `
+                INSERT INTO IndividualChats (participant1, participant2)
+                VALUES ($1, $2)
+                RETURNING *
+                `,
+            values: [senderID, receiverID]
+        };
 
-        await newIndividualChat.save();
+        const newIndividualChatResponse = await client.query(query3);
+        const newIndividualChat = newIndividualChatResponse.rows[0];
 
-        const newChat = await Chat.create({
-            type: 'IndividualChat',
-            chat: newIndividualChat._id
-        });
+        // Update users' chat lists
+        const query4 = {
+            text: `
+                INSERT INTO UserChats (user_id, chat_id, chat_type)
+                VALUES ($1, $2, 'individual'), ($3, $2, 'individual')
+            `,
+            values: [senderID, newIndividualChat._id, receiverID]
+        };
 
+        await client.query(query4);
 
-        await User.updateMany(
-            { _id: { $in: [senderID, receiverID] } },
-            { $push: { chats: newChat._id } }
-        );
+        await client.query('COMMIT'); // Commit the transaction
 
         res.status(201).json({
             message: 'One-on-one chat created successfully',
-            data: newChat
+            data: newIndividualChat
         });
     } catch (err) {
+        await client.query('ROLLBACK'); // Rollback in case of an error
         res.status(500).json({ message: err.message });
+    } finally {
+        client.release(); // Release the client back to the pool
     }
 };
 
 // Create a group chat
 const createGroupChat = async (req, res) => {
+    const client = await pool.connect();
     try {
-        const { name, description, members, message } = req.body;
+        await client.query('BEGIN'); // Start the transaction
+
+        const { name, description, members } = req.body;
         const senderID = req.user._id;
 
         // Ensure the owner is included in the members
@@ -68,178 +97,362 @@ const createGroupChat = async (req, res) => {
             members.push(senderID.toString());
         }
 
-        const newGroupChat = await GroupChat.create({
-            name,
-            description,
-            owner: senderID,
-            admins: [senderID],
-            members,
-        });
+        // Create a new group chat
+        const query1 = {
+            text: "INSERT INTO GroupChats (name, description, owner) VALUES ($1, $2, $3) RETURNING *",
+            values: [name, description, senderID]
+        };
 
-        await newGroupChat.save();
+        const response = await client.query(query1);
+        const newGroupChat = response.rows[0];
 
-        const newChat = await Chat.create({
-            type: 'GroupChat',
-            chat: newGroupChat._id
-        });
+        // Prepare bulk insert for UserChats
+        const userChatsValues = members.map(memberID => `('${memberID}', '${newGroupChat._id}', 'group')`).join(', ');
+        const query2 = {
+            text: `INSERT INTO UserChats (user_id, chat_id, chat_type) VALUES ${userChatsValues}`
+        };
 
-        await User.updateMany(
-            { _id: { $in: members } },
-            { $push: { chats: newChat._id } }
-        );
+        // Prepare bulk insert for GroupChatParticipants
+        const groupChatParticipantsValues = members.map(memberID => `('${newGroupChat._id}', '${memberID}')`).join(', ');
+        const query3 = {
+            text: `INSERT INTO GroupChatParticipants (groupchat_id, user_id) VALUES ${groupChatParticipantsValues}`
+        };
+
+        await client.query(query2);
+        await client.query(query3);
+
+        await client.query('COMMIT'); // Commit the transaction
 
         res.status(201).json({
             message: 'Group chat created successfully',
-            data: { chat: newChat }
+            data: { chat: newGroupChat }
         });
     } catch (err) {
+        await client.query('ROLLBACK'); // Rollback in case of an error
         res.status(500).json({ message: err.message });
+    } finally {
+        client.release(); // Release the client back to the pool
     }
 };
 
 // Get all chats for a user
 const getChats = async (req, res) => {
+    const client = await pool.connect();
     try {
         const { userID } = req.query;
 
-        // First populate IndividualChat type
-        const foundUserWithIndividualChats = await User.findById(userID)
-            .populate({
-                path: 'chats',
-                populate: {
-                    path: 'chat',
-                    model: 'IndividualChat',
-                    populate: [
-                        { path: 'lastMessage', populate: { path: 'sender', select: 'username' } },
-                        { path: 'participants', select: 'username' }
-                    ],
-                },
-            })
-            .exec();
-
-        // Then populate GroupChat type
-        const foundUserWithGroupChats = await User.findById(userID)
-            .populate({
-                path: 'chats',
-                populate: {
-                    path: 'chat',
-                    model: 'GroupChat',
-                    populate: [
-                        { path: 'lastMessage', populate: { path: 'sender', select: 'username' } },
-                    ],
-                },
-            })
-            .exec();
-
-        if (!foundUserWithIndividualChats || !foundUserWithGroupChats) {
-            return res.status(404).json({ message: 'No such user exists' });
-        }
-
-        // Combine the populated results from both queries
-        const combinedChats = {
-            individualChats: foundUserWithIndividualChats.chats.filter(chat => chat.type === 'IndividualChat'),
-            groupChats: foundUserWithGroupChats.chats.filter(chat => chat.type === 'GroupChat'),
+        // Fetch individual chats
+        const query1 = {
+            text: `
+                SELECT 
+                    ic._id AS chat_id,
+                    ic.created_at,
+                    jsonb_build_object(
+                        '_id', u1._id,
+                        'username', u1.username,
+                        'avatar', u1.avatar
+                    ) AS participant1,
+                    jsonb_build_object(
+                        '_id', u2._id,
+                        'username', u2.username,
+                        'avatar', u2.avatar
+                    ) AS participant2,
+                    CASE
+                        WHEN ic.lastMessage IS NOT NULL THEN jsonb_build_object(
+                            '_id', m._id,
+                            'message', m.message,
+                            'sender', jsonb_build_object(
+                                '_id', u3._id,
+                                'username', u3.username,
+                                'avatar', u3.avatar
+                            ),
+                            'created_at', m.created_at
+                        )
+                        ELSE NULL
+                    END AS lastMessage
+                FROM IndividualChats ic
+                JOIN UserChats uc ON uc.chat_id = ic._id
+                JOIN Users u1 ON ic.participant1 = u1._id
+                JOIN Users u2 ON ic.participant2 = u2._id
+                LEFT JOIN Messages m ON ic.lastMessage = m._id
+                LEFT JOIN Users u3 ON m.sender = u3._id
+                WHERE uc.user_id = $1 AND uc.chat_type = 'individual';
+            `,
+            values: [userID]
         };
+
+        const individualChatsResponse = await client.query(query1);
+        const individual_chats = individualChatsResponse.rows;
+
+        // Fetch group chats
+        const query2 = {
+            text: `
+                SELECT 
+                    gc._id AS chat_id,
+                    gc.name,
+                    gc.description,
+                    gc.created_at,
+                    jsonb_build_object(
+                        '_id', u._id,
+                        'username', u.username,
+                        'avatar', u.avatar
+                    ) AS owner,
+                    CASE
+                        WHEN gc.lastMessage IS NOT NULL THEN jsonb_build_object(
+                            '_id', m._id,
+                            'message', m.message,
+                            'sender', jsonb_build_object(
+                                '_id', u3._id,
+                                'username', u3.username,
+                                'avatar', u3.avatar
+                            ),
+                            'created_at', m.created_at
+                        )
+                        ELSE NULL
+                    END AS lastMessage
+                FROM GroupChats gc
+                JOIN UserChats uc ON uc.chat_id = gc._id
+                JOIN Users u ON u._id = gc.owner
+                LEFT JOIN Messages m ON gc.lastMessage = m._id
+                LEFT JOIN Users u3 ON m.sender = u3._id
+                WHERE uc.user_id = $1 AND uc.chat_type = 'group';
+            `,
+            values: [userID]
+        };
+
+        const groupChatsResponse = await client.query(query2);
+        const group_chats = groupChatsResponse.rows;
 
         res.status(200).json({
             message: 'User chats retrieved successfully',
-            data: combinedChats,
+            data: { individualChats: individual_chats, groupChats: group_chats }
         });
     } catch (err) {
         res.status(500).json({ message: err.message });
+    } finally {
+        client.release(); // Release the client back to the pool
     }
 };
 
 
 // Get a single chat
 const getChat = async (req, res) => {
+    const client = await pool.connect();
     try {
         const { id } = req.params;
 
-        const chat = await Chat.findById(id)
-            .populate({
-                path: 'chat',
-                populate: [
-                    {
-                        path: 'messages',
-                        populate: {
-                            path: 'sender',
-                            select: 'username avatar',
-                        },
-                    },
-                    {
-                        path: 'participants',
-                        select: 'username avatar',
-                    },
+        // Query to fetch individual chat details
+        const individualChatQuery = {
+            text: `
+                SELECT 
+                    ic._id AS individual_chat_id,
+                    jsonb_build_object(
+                        '_id', ic.participant1,
+                        'username', u1.username,
+                        'avatar', u1.avatar
+                    ) AS participant1,
+                    jsonb_build_object(
+                        '_id', ic.participant2,
+                        'username', u2.username,
+                        'avatar', u2.avatar
+                    ) AS participant2,
+                    jsonb_agg(
+                        jsonb_build_object(
+                            '_id', m1._id,
+                            'message', m1.message,
+                            'sender', jsonb_build_object(
+                                '_id', m1.sender,
+                                'username', u3.username,
+                                'avatar', u3.avatar
+                            ),
+                            'created_at', m1.created_at
+                        )
+                    ) AS messages,
+                    ic.created_at AS created_at
+                FROM IndividualChats ic
+                LEFT JOIN IndividualChatMessages icm ON icm.individualchat_id = ic._id
+                LEFT JOIN Messages m1 ON icm.message_id = m1._id
+                LEFT JOIN Users u1 ON ic.participant1 = u1._id
+                LEFT JOIN Users u2 ON ic.participant2 = u2._id
+                LEFT JOIN Users u3 ON m1.sender = u3._id
+                WHERE ic._id = $1
+                GROUP BY 
+                    ic._id,
+                    u1.username,
+                    u1.avatar,
+                    u2.username,
+                    u2.avatar,
+                    ic.created_at;
+            `,
+            values: [id]
+        };
 
-                ],
-            })
-            .exec();
+        // Query to fetch group chat details
+        const groupChatQuery = {
+            text: `
+                SELECT 
+                    gc._id AS group_chat_id,
+                    gc.name,
+                    gc.description,
+                    jsonb_build_object(
+                        '_id', u._id,
+                        'username', u.username,
+                        'avatar', u.avatar
+                    ) AS owner,
+                    jsonb_agg(
+                        jsonb_build_object(
+                            '_id', m2._id,
+                            'message', m2.message,
+                            'sender', jsonb_build_object(
+                                '_id', m2.sender,
+                                'username', u4.username,
+                                'avatar', u4.avatar
+                            ),
+                            'created_at', m2.created_at
+                        )
+                    ) AS messages,
+                    gc.created_at AS created_at
+                FROM GroupChats gc
+                LEFT JOIN GroupChatMessages gcm ON gcm.groupchat_id = gc._id
+                LEFT JOIN Messages m2 ON gcm.message_id = m2._id
+                LEFT JOIN Users u ON u._id = gc.owner
+                LEFT JOIN Users u4 ON m2.sender = u4._id
+                WHERE gc._id = $1
+                GROUP BY 
+                    gc._id,
+                    u._id,
+                    u.username,
+                    u.avatar,
+                    gc.name,
+                    gc.description,
+                    gc.created_at;
+            `,
+            values: [id]
+        };
 
+        let chat;
+
+        // Check if the chat exists as an individual chat
+        const individualChatResponse = await client.query(individualChatQuery);
+        chat = individualChatResponse.rows[0];
+
+        // If no individual chat is found, fetch it as a group chat
         if (!chat) {
-            return res.status(404).json({ message: 'No chat with the given ID exists' });
+            const groupChatResponse = await client.query(groupChatQuery);
+            chat = groupChatResponse.rows[0];
+
+            if (!chat) {
+                return res.status(404).json({ message: 'No chat with the given ID exists' });
+            }
+
+            // Format the response for group chat
+            const responseData = {
+                message: 'Group chat retrieved successfully',
+                data: {
+                    chat_id: chat.group_chat_id,
+                    name: chat.name,
+                    description: chat.description,
+                    owner: chat.owner,
+                    messages: chat.messages ? chat.messages : [],
+                    created_at: chat.created_at
+                }
+            };
+            return res.status(200).json(responseData);
         }
 
-        res.status(200).json({
-            message: 'Chat retrieved successfully',
-            data: chat,
-        });
+        // Format the response for individual chat
+        const responseData = {
+            message: 'Individual chat retrieved successfully',
+            data: {
+                chat_id: chat.individual_chat_id,
+                participant1: chat.participant1,
+                participant2: chat.participant2,
+                messages: chat.messages ? chat.messages : [],
+                created_at: chat.created_at
+            }
+        };
+
+        res.status(200).json(responseData);
     } catch (err) {
         res.status(500).json({ message: err.message });
+    } finally {
+        client.release();
     }
 };
 
 // Update a chat with a new message
 const updateChat = async (req, res) => {
+    const client = await pool.connect();
     try {
+        await client.query('BEGIN'); // Start the transaction
+
         const { id } = req.params;
-        const { message } = req.body;
+        const { message, messageID } = req.body;
         const senderID = req.user._id;
 
         // Find the chat by ID
-        const chat = await Chat.findById(id).exec();
+        const query1 = {
+            text: `
+                SELECT * FROM (
+                    SELECT ic._id AS chat_id, 'individual' AS chat_type
+                    FROM IndividualChats ic
+                    WHERE ic._id = $1
+                    UNION ALL
+                    SELECT gc._id AS chat_id, 'group' AS chat_type
+                    FROM GroupChats gc
+                    WHERE gc._id = $1
+                ) c
+            `,
+            values: [id]
+        };
+
+        const chatResponse = await client.query(query1);
+        const chat = chatResponse.rows[0];
         if (!chat) {
+            await client.query('ROLLBACK'); // Rollback if chat doesn't exist
             return res.status(404).json({ message: 'Chat does not exist' });
         }
 
         // Create a new message
-        const newMessage = await Message.create({
-            message,
-            sender: senderID,
-            chat: chat._id,
-        });
+        const query2 = {
+            text: "INSERT INTO Messages (_id, message, sender, chat_id, chat_type) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+            values: [messageID, message, senderID, id, chat.chat_type]
+        };
+
+        const newMessageResponse = await client.query(query2);
+        const newMessage = newMessageResponse.rows[0];
 
         // Update the detailed chat model
-        let chatDetails;
-        if (chat.type === 'IndividualChat') {
-            chatDetails = await IndividualChat.findById(chat.chat)
-            .populate({path:'participants', select: 'username avatar'})
-            .exec();
-        } else if (chat.type === 'GroupChat') {
-            chatDetails = await GroupChat.findById(chat.chat).exec();
-        }
+        const query3 = {
+            text: `
+                UPDATE ${chat.chat_type === 'individual' ? 'IndividualChats' : 'GroupChats'}
+                SET lastMessage = $1
+                WHERE _id = $2
+            `,
+            values: [newMessage._id, id]
+        };
 
-        if (!chatDetails) {
-            return res.status(404).json({ message: 'Chat details not found' });
-        }
+        await client.query(query3);
 
-        // Push the new message to the chat
-        chatDetails.messages.push(newMessage._id);
-        chatDetails.lastMessage = newMessage._id;
+        // Insert into IndividualChatMessages or GroupChatMessages
+        const query4 = {
+            text: `
+                INSERT INTO ${chat.chat_type === 'individual' ? 'IndividualChatMessages' : 'GroupChatMessages'} (${chat.chat_type === 'individual' ? 'individualchat_id' : 'groupchat_id'}, message_id)
+                VALUES ($1, $2)
+            `,
+            values: [id, newMessage._id]
+        };
 
-        await chatDetails.save();
+        await client.query(query4);
 
-        // Add receiver information to the new message
-        let newMessageWithReceiver = newMessage.toObject();
-        if (chat.type === 'IndividualChat') {
-            const receiver = chatDetails.participants.find(participant => participant._id.toString() !== senderID.toString());
-            newMessageWithReceiver.receiver = receiver;
-        }
+        await client.query('COMMIT'); // Commit the transaction
 
-
-        res.status(201).json({ message: 'Chat updated successfully', newMessage: newMessageWithReceiver});
+        res.status(201).json({ message: 'Chat updated successfully', newMessage });
     } catch (err) {
+        await client.query('ROLLBACK'); // Rollback in case of an error
         res.status(500).json({ message: err.message });
+    } finally {
+        client.release(); // Release the client back to the pool
     }
 };
 
@@ -251,3 +464,4 @@ module.exports = {
     getChat,
     updateChat,
 };
+
