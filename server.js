@@ -30,8 +30,8 @@ io.on('connection', (socket) => {
     });
 
     socket.on('drawing', data=>{
-        const reciever = users[data.reciever];
-        socket.to(reciever).emit('drawing', data);
+        const room = data.chat_id;
+        socket.to(room).emit('drawing', data);
     })
 
     // Joining rooms based on chat type (individual or group)
