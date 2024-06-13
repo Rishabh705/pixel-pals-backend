@@ -43,12 +43,9 @@ io.on('connection', (socket) => {
     // Broadcasting messages to the appropriate room
     socket.on('send-message', async (data) => {
         const room = data.chat_id;
-
-        console.log(`User ${socket.id} is sending a message to chat ${room}`);
-
+        
         // Broadcast message to the room
         socket.to(room).emit('receive-message', data);
-        console.log(`Message sent to room ${room}`);
 
         // If it's a group chat, send the message to all group members
         if (data.receiver._id === '') {
@@ -74,18 +71,15 @@ io.on('connection', (socket) => {
     // Handling typing indicator
     socket.on('typing', (data) => {
         const room = data.chat_id;
-        console.log(`User ${socket.id} is typing in chat ${room}`);
         socket.to(room).emit('typing', data);
     });
 
     socket.on('stop-typing', (data) => {
-        console.log(`User ${socket.id} stopped typing in chat ${data.chat_id}`);
         socket.to(data.chat_id).emit('stop-typing', data);
     });
 
     // Handling disconnections
     socket.on('disconnect', () => {
-        console.log(`User ${socket.id} disconnected`);
         // Clean up if needed
         Object.keys(users).forEach((userId) => {
             if (users[userId] === socket.id) {
