@@ -19,18 +19,24 @@ const io = new Server(expressServer, {
     },
 });
 
-const users = {};
+const users = new Map();
 
 io.on('connection', (socket) => {
 
     socket.on('register-user', (userId) => {
         users[userId] = socket.id; // Track the socket ID for each user
         console.log(`Registered user ${userId} with socket ${socket.id}`);
+        console.log(users);
     });
+
+    socket.on('drawing', data=>{
+        const reciever = users[data.reciever];
+        socket.to(reciever).emit('drawing', data);
+    })
 
     // Joining rooms based on chat type (individual or group)
     socket.on('join-chat', async (chat_id) => {
-        socket.join(chat_id);
+        socket.join(chat_id); //create a room for this chat
         console.log(`User ${socket.id} joined chat ${chat_id}`);
     });
 
@@ -54,14 +60,14 @@ io.on('connection', (socket) => {
 
                 groupMembers.rows.forEach(member => {
                     if (users[member.user_id]) {
-                        io.to(users[member.user_id]).emit('receive-message', data);
+                        socket.to(users[member.user_id]).emit('receive-message', data);
                     }
                 });
             } catch (error) {
                 console.error('Error fetching group members:', error);
             }
         } else if (users[data.receiver._id]) {
-            io.to(users[data.receiver._id]).emit('receive-message', data);
+            socket.to(users[data.receiver._id]).emit('receive-message', data);
         }
     });
 
