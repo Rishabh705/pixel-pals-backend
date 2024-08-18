@@ -26,7 +26,7 @@ io.on('connection', (socket) => {
     socket.on('register-user', (userId) => {
         users[userId] = socket.id; // Track the socket ID for each user
         console.log(`Registered user ${userId} with socket ${socket.id}`);
-        console.log(users);
+        // console.log(users);
     });
 
     socket.on('drawing', data=>{
@@ -37,7 +37,7 @@ io.on('connection', (socket) => {
     // Joining rooms based on chat type (individual or group)
     socket.on('join-chat', async (chat_id) => {
         socket.join(chat_id); //create a room for this chat
-        console.log(`User ${socket.id} joined chat ${chat_id}`);
+        // console.log(`User ${socket.id} joined chat ${chat_id}`);
     });
 
     // Broadcasting messages to the appropriate room

@@ -30,18 +30,18 @@ const login = async (req, res) => {
                     }
                 },
                 process.env.ACCESS_TOKEN_SECRET,
-                { expiresIn: '1d' }
+                { expiresIn: '15m' }
             );
             const refreshToken = jwt.sign(
                 { "email": foundUser.email },
                 process.env.REFRESH_TOKEN_SECRET,
-                { expiresIn: '1d' }
+                { expiresIn: '2d' }
             );
             // Saving refreshToken with current user
             
             const query2 = {
-                text: 'UPDATE users SET refreshToken = $1',
-                values: [refreshToken]
+                text: 'UPDATE users SET refreshToken = $1 WHERE email = $2',
+                values: [refreshToken, foundUser.email]
             };
 
             await pool.query(query2);
@@ -53,7 +53,7 @@ const login = async (req, res) => {
             res.status(201).json(
                 {
                     message: 'Authenticated',
-                    accessToken: accessToken
+                    accessToken: accessToken,
                 })
         }
         else {
