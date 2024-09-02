@@ -26,7 +26,7 @@ io.on('connection', (socket) => {
     socket.on('register-user', (userId) => {
         users[userId] = socket.id; // Track the socket ID for each user
         // console.log(`Registered user ${userId} with socket ${socket.id}`);
-        // console.log(users);
+        console.log(users);
     });
 
     socket.on('drawing', data=>{
