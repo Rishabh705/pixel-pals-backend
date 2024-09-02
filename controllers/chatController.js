@@ -227,8 +227,7 @@ const getChats = async (req, res) => {
 
         // Decrypt last messages for individual chats
         for (let chat of individual_chats) {
-
-            if (chat.lastmessage && chat.lastmessage.message!=null) {
+            if (chat.lastmessage && chat.lastmessage.message!=null) {                               
                 chat.lastmessage.message = decryptMessage(chat.lastmessage.message);
             }
         }

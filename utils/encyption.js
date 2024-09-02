@@ -1,11 +1,14 @@
 const crypto = require('crypto');
+require('dotenv').config();
 
-// Replace these with your actual encryption key and IV
-const ENCRYPTION_KEY = crypto.randomBytes(32); // 32 bytes for AES-256
-const IV = crypto.randomBytes(16); // 16 bytes for AES
+// Get the encryption key from environment variables
+const ENCRYPTION_KEY = Buffer.from(process.env.ENCRYPTION_KEY, 'hex'); // Ensure it's a Buffer
 
 const encryptMessage = (plainTextMessage) => {
-    try {        
+    try {
+       
+        // Generate a new IV for each encryption
+        const IV = crypto.randomBytes(16); // 16 bytes for AES
         const cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPTION_KEY, IV);
         let encrypted = cipher.update(plainTextMessage, 'utf8', 'hex');
         encrypted += cipher.final('hex');

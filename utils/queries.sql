@@ -116,3 +116,34 @@ DROP TABLE IF EXISTS GroupChats CASCADE;
 
 -- Drop Enum Type
 DROP TYPE IF EXISTS CHATTYPE CASCADE;
+
+
+-- Clear data from UserChats table
+TRUNCATE TABLE UserChats RESTART IDENTITY CASCADE;
+
+-- Clear data from UserSavedContacts table
+TRUNCATE TABLE UserSavedContacts RESTART IDENTITY CASCADE;
+
+-- Clear data from IndividualChatMessages table
+TRUNCATE TABLE IndividualChatMessages RESTART IDENTITY CASCADE;
+
+-- Clear data from IndividualChats table
+TRUNCATE TABLE IndividualChats RESTART IDENTITY CASCADE;
+
+-- Clear data from GroupChatMessages table
+TRUNCATE TABLE GroupChatMessages RESTART IDENTITY CASCADE;
+
+-- Clear data from GroupChatAdmins table
+TRUNCATE TABLE GroupChatAdmins RESTART IDENTITY CASCADE;
+
+-- Clear data from GroupChatParticipants table
+TRUNCATE TABLE GroupChatParticipants RESTART IDENTITY CASCADE;
+
+-- Clear data from GroupChats table
+TRUNCATE TABLE GroupChats RESTART IDENTITY CASCADE;
+
+-- Clear data from Messages table
+TRUNCATE TABLE Messages RESTART IDENTITY CASCADE;
+
+-- Clear data from Users table
+TRUNCATE TABLE Users RESTART IDENTITY CASCADE;
