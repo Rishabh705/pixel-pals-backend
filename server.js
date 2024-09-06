@@ -25,8 +25,12 @@ io.on('connection', (socket) => {
 
     socket.on('register-user', (userId) => {
         users[userId] = socket.id; // Track the socket ID for each user
+
+        // console.log(`Registered user ${userId} with socket ${socket.id}`);
+        console.log(users);
         console.log(`Registered user ${userId} with socket ${socket.id}`);
         // console.log(users);
+
     });
 
     socket.on('drawing', data=>{
@@ -39,6 +43,13 @@ io.on('connection', (socket) => {
         socket.join(chat_id); //create a room for this chat
         // console.log(`User ${socket.id} joined chat ${chat_id}`);
     });
+
+    socket.on('chat-created', (data) => {
+        // Notify the recipient to join the chat room
+        const recipientId = data.recipientId; // Assuming you send recipientId with the event
+        socket.to(users[recipientId]).emit('join-chat', data.chatId);
+    });
+    
 
     // Broadcasting messages to the appropriate room
     socket.on('send-message', async (data) => {
