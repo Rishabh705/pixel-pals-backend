@@ -13,10 +13,20 @@ CREATE TABLE Users (
 
 CREATE TABLE Messages (
     _id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    message VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL, -- Storing the encrypted message
     sender UUID REFERENCES Users(_id) ON DELETE CASCADE,
     chat_id UUID NOT NULL,
     chat_type VARCHAR(50) CHECK (chat_type IN ('individual', 'group')),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Table for storing public/private keys
+CREATE TABLE Keys (
+    _id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    publicKey TEXT NOT NULL, -- Base64-encoded public key
+    privateKey TEXT NOT NULL, -- Base64-encoded public key
+    user_id UUID REFERENCES Users(_id) ON DELETE CASCADE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -106,6 +116,7 @@ DROP TABLE IF EXISTS IndividualChats CASCADE;
 DROP TABLE IF EXISTS Messages CASCADE;
 DROP TABLE IF EXISTS UserSavedContacts CASCADE;
 DROP TABLE IF EXISTS UserChats CASCADE;
+DROP TABLE IF EXISTS Keys CASCADE;
 DROP TABLE IF EXISTS Users CASCADE;
 
 -- Drop Group Tables and its dependents
@@ -146,4 +157,5 @@ TRUNCATE TABLE GroupChats RESTART IDENTITY CASCADE;
 TRUNCATE TABLE Messages RESTART IDENTITY CASCADE;
 
 -- Clear data from Users table
+TRUNCATE TABLE Keys RESTART IDENTITY CASCADE;
 TRUNCATE TABLE Users RESTART IDENTITY CASCADE;

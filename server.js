@@ -20,62 +20,85 @@ const io = new Server(expressServer, {
 });
 
 const users = new Map();
+const chatPublicKeys = {};
 
 io.on('connection', (socket) => {
 
     socket.on('register-user', (userId) => {
         users[userId] = socket.id; // Track the socket ID for each user
-
-        // console.log(`Registered user ${userId} with socket ${socket.id}`);
         console.log(users);
-        console.log(`Registered user ${userId} with socket ${socket.id}`);
-        // console.log(users);
-
+        // console.log(`Registered user ${userId} with socket ${socket.id}`);
     });
 
-    socket.on('drawing', data=>{
+    socket.on('drawing', data => {
         const room = data.chat_id;
         socket.to(room).emit('drawing', data);
     })
 
     // Joining rooms based on chat type (individual or group)
-    socket.on('join-chat', async (chat_id) => {
-        socket.join(chat_id); //create a room for this chat
-        // console.log(`User ${socket.id} joined chat ${chat_id}`);
-    });
-
-    socket.on('chat-created', (data) => {
-        // Notify the recipient to join the chat room
-        const recipientId = data.recipientId; // Assuming you send recipientId with the event
-        socket.to(users[recipientId]).emit('join-chat', data.chatId);
+    socket.on('join-chat', async (chat_id, type) => {
+        socket.join(chat_id); // Create a room for this chat
+    
+        let publicKeys = {};
+    
+        // Fetch public keys from the database based on chat type
+        if (type === 'individual') {
+            const result = await pool.query(
+                `SELECT jsonb_build_object(
+                    k1.user_id, k1.publicKey,
+                    k2.user_id, k2.publicKey
+                ) AS public_key_mapping
+                FROM IndividualChats ic
+                JOIN Keys k1 ON ic.participant1 = k1.user_id
+                JOIN Keys k2 ON ic.participant2 = k2.user_id
+                WHERE ic._id = $1;`,
+                [chat_id]
+            );
+    
+            // Extract public keys from the result
+            publicKeys = result.rows[0]?.public_key_mapping || {};
+        } else if (type === 'group') {
+            const result = await pool.query(
+                'SELECT publicKeys FROM GroupChats WHERE _id = $1',
+                [chat_id]
+            );
+    
+            // Extract public keys from the result
+            publicKeys = result.rows[0]?.publicKeys || {};
+        }
+    
+        // Emit public keys to the connected user
+        socket.emit('others-public-key', publicKeys);
+    
+        // Emit public keys to other connected users in the chat room
+        socket.to(chat_id).emit('others-public-key', publicKeys);
     });
     
+    
 
-    // Broadcasting messages to the appropriate room
-    socket.on('send-message', async (data) => {
-        const room = data.chat_id;
-        
-        // Broadcast message to the room
-        socket.to(room).emit('receive-message', data);
+    socket.on('share-public-key', ({ publicKey }) => {
+        // Store the public key associated with the chat ID
+        chatPublicKeys[socket.id] = publicKey;
+        console.log(chatPublicKeys);
+    });
 
-        // If it's a group chat, send the message to all group members
-        if (data.receiver._id === '') {
-            try {
-                const groupMembers = await pool.query(
-                    'SELECT user_id FROM groupchatparticipants WHERE groupchat_id = $1',
-                    [data.chat_id]
-                );
+    // sending messages
+    socket.on('send-message', (data) => {
+        const chatType = data.chat_type;
+        const chatId = data.chat_id;
+        const receiverId = data.receiver._id;
+        console.log(data.message);
+        // Handle group chat
+        if (chatType === 'group') {
+            const room = chatId;
 
-                groupMembers.rows.forEach(member => {
-                    if (users[member.user_id]) {
-                        socket.to(users[member.user_id]).emit('receive-message', data);
-                    }
-                });
-            } catch (error) {
-                console.error('Error fetching group members:', error);
-            }
-        } else if (users[data.receiver._id]) {
-            socket.to(users[data.receiver._id]).emit('receive-message', data);
+            // Broadcast the message to all connected users in the group chat room
+            socket.to(room).emit('receive-message', data);
+        }
+        // Handle private chat
+        else if (chatType === 'individual' && users[receiverId]) {
+            // Send the message directly to the receiver if they are online
+            socket.to(users[receiverId]).emit('receive-message', data);
         }
     });
 

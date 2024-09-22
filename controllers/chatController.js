@@ -1,7 +1,4 @@
 const pool = require('../config/psqldb');
-const bcrypt = require('bcrypt');
-const { encryptMessage, decryptMessage } = require('../utils/encyption');
-
 // Create a one-on-one chat
 const createOneOnOneChat = async (req, res) => {
     const client = await pool.connect();
@@ -143,7 +140,12 @@ const getChats = async (req, res) => {
     try {
         const { userID } = req.query;
 
-        // Fetch individual chats
+        // Input validation
+        if (!userID) {
+            return res.status(400).json({ message: 'Bad Request: Missing userID' });
+        }
+
+        // Fetch individual chats with 'type' field
         const query1 = {
             text: `
                 SELECT 
@@ -171,7 +173,8 @@ const getChats = async (req, res) => {
                             'created_at', m.created_at
                         )
                         ELSE NULL
-                    END AS lastMessage
+                    END AS lastMessage,
+                    'individual' AS chat_type
                 FROM IndividualChats ic
                 JOIN UserChats uc ON uc.chat_id = ic._id
                 JOIN Users u1 ON ic.participant1 = u1._id
@@ -186,7 +189,7 @@ const getChats = async (req, res) => {
         const individualChatsResponse = await client.query(query1);
         const individual_chats = individualChatsResponse.rows;
 
-        // Fetch group chats
+        // Fetch group chats with 'type' field
         const query2 = {
             text: `
                 SELECT 
@@ -211,7 +214,8 @@ const getChats = async (req, res) => {
                             'created_at', m.created_at
                         )
                         ELSE NULL
-                    END AS lastMessage
+                    END AS lastMessage,
+                    'group' AS chat_type
                 FROM GroupChats gc
                 JOIN UserChats uc ON uc.chat_id = gc._id
                 JOIN Users u ON u._id = gc.owner
@@ -225,32 +229,21 @@ const getChats = async (req, res) => {
         const groupChatsResponse = await client.query(query2);
         const group_chats = groupChatsResponse.rows;
 
-        // Decrypt last messages for individual chats
-        for (let chat of individual_chats) {
-            if (chat.lastmessage && chat.lastmessage.message!=null) {                               
-                chat.lastmessage.message = decryptMessage(chat.lastmessage.message);
-            }
-        }
-  
-        // Decrypt last messages for group chats
-        for (let chat of group_chats) {
-            if (chat.lastmessage && chat.lastmessage.message!=null) {
-                chat.lastmessage.message = decryptMessage(chat.lastmessage.message);
-            }
-        }
-
-
-
         res.status(200).json({
             message: 'User chats retrieved successfully',
-            data: { individualChats: individual_chats, groupChats: group_chats }
+            data: { 
+                individualChats: individual_chats, 
+                groupChats: group_chats 
+            }
         });
     } catch (err) {
-        res.status(500).json({ message: err.message });
+        console.error('Error retrieving chats:', err); // Log the error for internal tracking
+        res.status(500).json({ message: 'Internal Server Error' }); // Avoid exposing sensitive details
     } finally {
         client.release(); // Release the client back to the pool
     }
 };
+
 
 
 // Get a single chat
@@ -354,7 +347,7 @@ const getChat = async (req, res) => {
         const individualChatResponse = await client.query(individualChatQuery);
         chat = individualChatResponse.rows[0];
 
-        // If no individual chat is found, fetch it as a group chat
+        // If no individual chat is found, try to fetch it as a group chat
         if (!chat) {
             const groupChatResponse = await client.query(groupChatQuery);
             chat = groupChatResponse.rows[0];
@@ -363,27 +356,12 @@ const getChat = async (req, res) => {
                 return res.status(404).json({ message: 'No chat with the given ID exists' });
             }
 
-            // Decrypt each message in group chat
-            if (chat.messages) {
-                chat.messages = chat.messages.map((message) => {
-                    // Check if the message field is valid before attempting to decrypt
-                    if (message.message !== null) {
-                        return {
-                            ...message,
-                            message: decryptMessage(message.message) // Decrypt the message here
-                        };
-                    } else {
-                        // If there's no message or it's invalid, return the original message object
-                        return message;
-                    }
-                });
-            }
-
             // Format the response for group chat
             const responseData = {
                 message: 'Group chat retrieved successfully',
                 data: {
                     chat_id: chat.group_chat_id,
+                    type: 'group',
                     name: chat.name,
                     description: chat.description,
                     owner: chat.owner,
@@ -394,27 +372,12 @@ const getChat = async (req, res) => {
             return res.status(200).json(responseData);
         }
 
-        // Decrypt each message in individual chat
-        if (chat.messages) {
-            chat.messages = chat.messages.map((message) => {
-                // Check if the message field is valid before attempting to decrypt                
-                if (message.message !== null) {
-                    return {
-                        ...message,
-                        message: decryptMessage(message.message) // Decrypt the message here
-                    };
-                } else {
-                    // If there's no message or it's invalid, return the original message object
-                    return message;
-                }
-            });
-        }
-
         // Format the response for individual chat
         const responseData = {
             message: 'Individual chat retrieved successfully',
             data: {
                 chat_id: chat.individual_chat_id,
+                type: 'individual',
                 participant1: chat.participant1,
                 participant2: chat.participant2,
                 messages: chat.messages ? chat.messages : [],
@@ -464,14 +427,10 @@ const updateChat = async (req, res) => {
             return res.status(404).json({ message: 'Chat does not exist' });
         }
 
-        //encrypt the message
-
-        const encMsg = encryptMessage(message)
-
         // Create a new message
         const query2 = {
             text: "INSERT INTO Messages (_id, message, sender, chat_id, chat_type) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-            values: [messageID, encMsg, senderID, id, chat.chat_type]
+            values: [messageID, message, senderID, id, chat.chat_type]
         };
 
         const newMessageResponse = await client.query(query2);
