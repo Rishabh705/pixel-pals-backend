@@ -25,57 +25,50 @@ io.on('connection', (socket) => {
 
     socket.on('register-user', (userId) => {
         users[userId] = socket.id; // Track the socket ID for each user
-
-        // console.log(`Registered user ${userId} with socket ${socket.id}`);
-        console.log(users);
-        console.log(`Registered user ${userId} with socket ${socket.id}`);
         // console.log(users);
-
+        // console.log(`Registered user ${userId} with socket ${socket.id}`);
     });
 
-    socket.on('drawing', data=>{
+    socket.on('drawing', data => {
         const room = data.chat_id;
         socket.to(room).emit('drawing', data);
     })
 
     // Joining rooms based on chat type (individual or group)
-    socket.on('join-chat', async (chat_id) => {
-        socket.join(chat_id); //create a room for this chat
-        // console.log(`User ${socket.id} joined chat ${chat_id}`);
-    });
+    socket.on('join-chat', async (chat_id, userID) => {
+        socket.join(chat_id); // Create a room for this chat
+        
+        // Fetch public keys from the database based on chat type
+        const result = await pool.query(
+            `SELECT encrypted_aes_key 
+            FROM Keys 
+            WHERE chat_id = $1 AND user_id = $2`,
+            [chat_id, userID]
+        );
+        
+        // Extract encrypted key from the result
+        const encryptionKey = result.rows[0]?.encrypted_aes_key;
 
-    socket.on('chat-created', (data) => {
-        // Notify the recipient to join the chat room
-        const recipientId = data.recipientId; // Assuming you send recipientId with the event
-        socket.to(users[recipientId]).emit('join-chat', data.chatId);
+        // Emit user's encryptedAES key to him
+        socket.emit('encryptionKey', encryptionKey);
     });
     
+    // sending messages
+    socket.on('send-message', (data) => {
+        const chatType = data.chat_type;
+        const chatId = data.chat_id;
+        const receiverId = data.receiver._id;
+        // Handle group chat
+        if (chatType === 'group') {
+            const room = chatId;
 
-    // Broadcasting messages to the appropriate room
-    socket.on('send-message', async (data) => {
-        const room = data.chat_id;
-        
-        // Broadcast message to the room
-        socket.to(room).emit('receive-message', data);
-
-        // If it's a group chat, send the message to all group members
-        if (data.receiver._id === '') {
-            try {
-                const groupMembers = await pool.query(
-                    'SELECT user_id FROM groupchatparticipants WHERE groupchat_id = $1',
-                    [data.chat_id]
-                );
-
-                groupMembers.rows.forEach(member => {
-                    if (users[member.user_id]) {
-                        socket.to(users[member.user_id]).emit('receive-message', data);
-                    }
-                });
-            } catch (error) {
-                console.error('Error fetching group members:', error);
-            }
-        } else if (users[data.receiver._id]) {
-            socket.to(users[data.receiver._id]).emit('receive-message', data);
+            // Broadcast the message to all connected users in the group chat room
+            socket.to(room).emit('receive-message', data);
+        }
+        // Handle private chat
+        else if (chatType === 'individual' && users[receiverId]) {
+            // Send the message directly to the receiver if they are online
+            socket.to(users[receiverId]).emit('receive-message', data);
         }
     });
 

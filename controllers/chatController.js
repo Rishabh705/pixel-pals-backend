@@ -1,7 +1,5 @@
 const pool = require('../config/psqldb');
-const bcrypt = require('bcrypt');
-const { encryptMessage, decryptMessage } = require('../utils/encyption');
-
+const { encryptSymmetricKey } = require('../utils/helpers');
 // Create a one-on-one chat
 const createOneOnOneChat = async (req, res) => {
     const client = await pool.connect();
@@ -10,6 +8,17 @@ const createOneOnOneChat = async (req, res) => {
 
         const { receiverID } = req.body;
         const senderID = req.user._id;
+
+        if (!receiverID) {
+            await client.query('ROLLBACK'); // Rollback if receiver doesn't exist
+            return res.status(400).json({ message: 'Bad Request: Missing receiverID' });
+        }
+
+        if (senderID === receiverID) {
+            await client.query('ROLLBACK'); // Rollback if receiver doesn't exist
+            return res.status(400).json({ message: 'Bad Request: Cannot create chat with self' });
+        }
+
 
         // Check if the receiver exists
         const query1 = {
@@ -47,18 +56,47 @@ const createOneOnOneChat = async (req, res) => {
             });
         }
 
+
+
         // Create a new individual chat
         const query3 = {
             text: `
-                INSERT INTO IndividualChats (participant1, participant2)
-                VALUES ($1, $2)
-                RETURNING *
-                `,
+            INSERT INTO IndividualChats (participant1, participant2)
+            VALUES ($1, $2)
+            RETURNING *
+            `,
             values: [senderID, receiverID]
         };
 
         const newIndividualChatResponse = await client.query(query3);
         const newIndividualChat = newIndividualChatResponse.rows[0];
+
+
+        // store the symmetric key after encrypting them in the Keys table
+        const publicKeysQuery = {
+            text: `SELECT _id, publicKey FROM Users WHERE _id IN ($1, $2)`,
+            values: [senderID, receiverID],
+        };
+        const publicKeysResponse = await client.query(publicKeysQuery);
+
+        const membersKeys = new Map()
+
+        publicKeysResponse.rows.map(row => {
+            membersKeys.set(row._id, row.publickey);
+        });
+
+        const { encryptedAESKeys } = await encryptSymmetricKey(membersKeys);
+
+        const chatKeysInsertQuery = {
+            text: `
+                INSERT INTO Keys (chat_id, user_id, encrypted_aes_key)
+                VALUES ${Array.from(encryptedAESKeys).map(([_id, encryptedKey], index) => `($1, $${index * 2 + 2}, $${index * 2 + 3})`).join(", ")}
+            `,
+            values: [newIndividualChat._id, ...Array.from(encryptedAESKeys).flatMap(([_id, encryptedKey]) => [_id, encryptedKey])],
+        };
+        
+        await client.query(chatKeysInsertQuery);
+
 
         // Update users' chat lists
         const query4 = {
@@ -94,9 +132,39 @@ const createGroupChat = async (req, res) => {
         const { name, description, members } = req.body;
         const senderID = req.user._id;
 
-        // Ensure the owner is included in the members
+        // Input validation
+        if (!name || !description || !members || !Array.isArray(members) || members.length === 0) {
+            await client.query('ROLLBACK'); // Rollback transaction on error
+            return res.status(400).json({ message: 'Bad Request: Missing required fields' });
+        }
+
+        // Ensure the owner is included in the members and handle duplicates
         if (!members.includes(senderID.toString())) {
             members.push(senderID.toString());
+        }
+
+        // Remove duplicates from members array
+        const uniqueMembers = [...new Set(members)];
+
+        // Check if there are valid members (at least one other than the sender)
+        if (uniqueMembers.length < 2) {
+            await client.query('ROLLBACK'); // Rollback transaction on error
+            return res.status(400).json({ message: 'Bad Request: At least one other member is required' });
+        }
+
+        // Check if all members exist
+        const memberCheckQuery = {
+            text: `SELECT _id FROM Users WHERE _id = ANY($1::uuid[])`,
+            values: [uniqueMembers],
+        };
+        const memberCheckResponse = await client.query(memberCheckQuery);
+
+        const existingMembers = memberCheckResponse.rows.map(row => row._id);
+        const missingMembers = uniqueMembers.filter(id => !existingMembers.includes(id));
+
+        if (missingMembers.length > 0) {
+            await client.query('ROLLBACK'); // Rollback transaction on error
+            return res.status(404).json({ message: 'Not Found: Some members do not exist', missingMembers });
         }
 
         // Create a new group chat
@@ -108,14 +176,47 @@ const createGroupChat = async (req, res) => {
         const response = await client.query(query1);
         const newGroupChat = response.rows[0];
 
+        // Fetch public keys for all members
+        const publicKeysQuery = {
+            text: `SELECT _id, publicKey FROM Users WHERE _id = ANY($1::uuid[])`,
+            values: [uniqueMembers],
+        };
+        const publicKeysResponse = await client.query(publicKeysQuery);
+
+        const membersKeys = new Map()
+
+        publicKeysResponse.rows.map(row => {
+            membersKeys.set(row._id, row.publickey);
+        });
+        // Check if we have valid public keys
+        if (membersKeys.size !== uniqueMembers.length) {
+            await client.query('ROLLBACK'); // Rollback transaction on error
+            return res.status(500).json({ message: 'Internal Server Error: Unable to retrieve all public keys' });
+        }
+        
+        // Encrypt the symmetric keys
+        const { encryptedAESKeys } = await encryptSymmetricKey(membersKeys);
+
+        // Store the encrypted keys in the Keys table
+        const chatKeysInsertQuery = {
+            text: `
+                INSERT INTO Keys (chat_id, user_id, encrypted_aes_key)
+                VALUES ${Array.from(encryptedAESKeys).map(([_id, encryptedKey], index) => `($1, $${index * 2 + 2}, $${index * 2 + 3})`).join(", ")}
+            `,
+            values: [newGroupChat._id, ...Array.from(encryptedAESKeys).flatMap(([_id, encryptedKey]) => [_id, encryptedKey])],
+        };
+
+        await client.query(chatKeysInsertQuery);
+
+
         // Prepare bulk insert for UserChats
-        const userChatsValues = members.map(memberID => `('${memberID}', '${newGroupChat._id}', 'group')`).join(', ');
+        const userChatsValues = uniqueMembers.map(memberID => `('${memberID}', '${newGroupChat._id}', 'group')`).join(', ');
         const query2 = {
             text: `INSERT INTO UserChats (user_id, chat_id, chat_type) VALUES ${userChatsValues}`
         };
 
         // Prepare bulk insert for GroupChatParticipants
-        const groupChatParticipantsValues = members.map(memberID => `('${newGroupChat._id}', '${memberID}')`).join(', ');
+        const groupChatParticipantsValues = uniqueMembers.map(memberID => `('${newGroupChat._id}', '${memberID}')`).join(', ');
         const query3 = {
             text: `INSERT INTO GroupChatParticipants (groupchat_id, user_id) VALUES ${groupChatParticipantsValues}`
         };
@@ -137,13 +238,19 @@ const createGroupChat = async (req, res) => {
     }
 };
 
+
 // Get all chats for a user
 const getChats = async (req, res) => {
     const client = await pool.connect();
     try {
         const { userID } = req.query;
 
-        // Fetch individual chats
+        // Input validation
+        if (!userID) {
+            return res.status(400).json({ message: 'Bad Request: Missing userID' });
+        }
+
+        // Fetch individual chats with 'type' field and encrypted AES keys
         const query1 = {
             text: `
                 SELECT 
@@ -171,13 +278,16 @@ const getChats = async (req, res) => {
                             'created_at', m.created_at
                         )
                         ELSE NULL
-                    END AS lastMessage
+                    END AS lastMessage,
+                    'individual' AS chat_type,
+                    COALESCE(k.encrypted_aes_key, NULL) AS encrypted_aes_key -- Ensure NULL if the key is missing
                 FROM IndividualChats ic
                 JOIN UserChats uc ON uc.chat_id = ic._id
                 JOIN Users u1 ON ic.participant1 = u1._id
                 JOIN Users u2 ON ic.participant2 = u2._id
                 LEFT JOIN Messages m ON ic.lastMessage = m._id
                 LEFT JOIN Users u3 ON m.sender = u3._id
+                LEFT JOIN Keys k ON k.chat_id = ic._id AND k.user_id = $1 -- Join with Keys table
                 WHERE uc.user_id = $1 AND uc.chat_type = 'individual';
             `,
             values: [userID]
@@ -186,7 +296,7 @@ const getChats = async (req, res) => {
         const individualChatsResponse = await client.query(query1);
         const individual_chats = individualChatsResponse.rows;
 
-        // Fetch group chats
+        // Fetch group chats with 'type' field and encrypted AES keys
         const query2 = {
             text: `
                 SELECT 
@@ -211,12 +321,15 @@ const getChats = async (req, res) => {
                             'created_at', m.created_at
                         )
                         ELSE NULL
-                    END AS lastMessage
+                    END AS lastMessage,
+                    'group' AS chat_type,
+                    COALESCE(k.encrypted_aes_key, NULL) AS encrypted_aes_key -- Ensure NULL if the key is missing
                 FROM GroupChats gc
                 JOIN UserChats uc ON uc.chat_id = gc._id
                 JOIN Users u ON u._id = gc.owner
                 LEFT JOIN Messages m ON gc.lastMessage = m._id
                 LEFT JOIN Users u3 ON m.sender = u3._id
+                LEFT JOIN Keys k ON k.chat_id = gc._id AND k.user_id = $1 -- Join with Keys table
                 WHERE uc.user_id = $1 AND uc.chat_type = 'group';
             `,
             values: [userID]
@@ -225,32 +338,23 @@ const getChats = async (req, res) => {
         const groupChatsResponse = await client.query(query2);
         const group_chats = groupChatsResponse.rows;
 
-        // Decrypt last messages for individual chats
-        for (let chat of individual_chats) {
-            if (chat.lastmessage && chat.lastmessage.message!=null) {                               
-                chat.lastmessage.message = decryptMessage(chat.lastmessage.message);
-            }
-        }
-  
-        // Decrypt last messages for group chats
-        for (let chat of group_chats) {
-            if (chat.lastmessage && chat.lastmessage.message!=null) {
-                chat.lastmessage.message = decryptMessage(chat.lastmessage.message);
-            }
-        }
-
-
-
+        // Send the response with individual and group chats, handling cases where no chats exist
         res.status(200).json({
             message: 'User chats retrieved successfully',
-            data: { individualChats: individual_chats, groupChats: group_chats }
+            data: {
+                individualChats: individual_chats.length ? individual_chats : [], // Return empty array if no chats
+                groupChats: group_chats.length ? group_chats : [], // Return empty array if no group chats
+            }
         });
     } catch (err) {
-        res.status(500).json({ message: err.message });
+        console.error('Error retrieving chats:', err); // Log the error for internal tracking
+        res.status(500).json({ message: 'Internal Server Error' }); // Avoid exposing sensitive details
     } finally {
         client.release(); // Release the client back to the pool
     }
 };
+
+
 
 
 // Get a single chat
@@ -354,7 +458,7 @@ const getChat = async (req, res) => {
         const individualChatResponse = await client.query(individualChatQuery);
         chat = individualChatResponse.rows[0];
 
-        // If no individual chat is found, fetch it as a group chat
+        // If no individual chat is found, try to fetch it as a group chat
         if (!chat) {
             const groupChatResponse = await client.query(groupChatQuery);
             chat = groupChatResponse.rows[0];
@@ -363,27 +467,12 @@ const getChat = async (req, res) => {
                 return res.status(404).json({ message: 'No chat with the given ID exists' });
             }
 
-            // Decrypt each message in group chat
-            if (chat.messages) {
-                chat.messages = chat.messages.map((message) => {
-                    // Check if the message field is valid before attempting to decrypt
-                    if (message.message !== null) {
-                        return {
-                            ...message,
-                            message: decryptMessage(message.message) // Decrypt the message here
-                        };
-                    } else {
-                        // If there's no message or it's invalid, return the original message object
-                        return message;
-                    }
-                });
-            }
-
             // Format the response for group chat
             const responseData = {
                 message: 'Group chat retrieved successfully',
                 data: {
                     chat_id: chat.group_chat_id,
+                    type: 'group',
                     name: chat.name,
                     description: chat.description,
                     owner: chat.owner,
@@ -394,27 +483,12 @@ const getChat = async (req, res) => {
             return res.status(200).json(responseData);
         }
 
-        // Decrypt each message in individual chat
-        if (chat.messages) {
-            chat.messages = chat.messages.map((message) => {
-                // Check if the message field is valid before attempting to decrypt                
-                if (message.message !== null) {
-                    return {
-                        ...message,
-                        message: decryptMessage(message.message) // Decrypt the message here
-                    };
-                } else {
-                    // If there's no message or it's invalid, return the original message object
-                    return message;
-                }
-            });
-        }
-
         // Format the response for individual chat
         const responseData = {
             message: 'Individual chat retrieved successfully',
             data: {
                 chat_id: chat.individual_chat_id,
+                type: 'individual',
                 participant1: chat.participant1,
                 participant2: chat.participant2,
                 messages: chat.messages ? chat.messages : [],
@@ -464,14 +538,10 @@ const updateChat = async (req, res) => {
             return res.status(404).json({ message: 'Chat does not exist' });
         }
 
-        //encrypt the message
-
-        const encMsg = encryptMessage(message)
-
         // Create a new message
         const query2 = {
             text: "INSERT INTO Messages (_id, message, sender, chat_id, chat_type) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-            values: [messageID, encMsg, senderID, id, chat.chat_type]
+            values: [messageID, message, senderID, id, chat.chat_type]
         };
 
         const newMessageResponse = await client.query(query2);
