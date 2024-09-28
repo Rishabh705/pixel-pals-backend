@@ -37,12 +37,12 @@ const login = async (req, res) => {
                     }
                 },
                 process.env.ACCESS_TOKEN_SECRET,
-                { expiresIn: '15m' }
+                { expiresIn: '1d' }
             );
             const refreshToken = jwt.sign(
                 { "email": foundUser.email },
                 process.env.REFRESH_TOKEN_SECRET,
-                { expiresIn: '2d' }
+                { expiresIn: '7d' }
             );
 
 
@@ -56,7 +56,7 @@ const login = async (req, res) => {
             await client.query(query2);
 
             const query4={
-                text: 'SELECT publicKey, privateKey FROM keys WHERE user_id = $1',
+                text: 'SELECT publicKey, privateKey FROM users WHERE _id = $1',
                 values: [foundUser._id]
             }
 
@@ -144,7 +144,7 @@ const register = async (req, res) => {
 
         const response = await client.query(query1)
         const duplicate = response.rows[0]
-
+ 
         // const duplicate = await User.findOne({ username: req.body.username }).exec()
         if (duplicate) {
             await client.query('ROLLBACK'); // END the transaction
@@ -156,22 +156,11 @@ const register = async (req, res) => {
 
         //create and store the new user
         const query2 = {
-            text: 'INSERT INTO users(username, email, password, refreshToken) VALUES($1, $2, $3, $4)',
-            values: [req.body.username, req.body.email, hashedPwd, '']
+            text: 'INSERT INTO users(username, email, password, refreshToken, publicKey, privateKey) VALUES($1, $2, $3, $4, $5, $6)',
+            values: [req.body.username, req.body.email, hashedPwd, '', req.body.data1, req.body.data2]
         };
 
         await client.query(query2);
-
-        const userResponse = await client.query(query1);
-
-        const newUser = userResponse.rows[0];
-
-        const query3 = {
-            text: 'INSERT INTO keys(publicKey, privateKey, user_id) VALUES($1, $2, $3)',
-            values: [req.body.data1, req.body.data2, newUser._id]
-        };
-
-        await client.query(query3);
 
         await client.query('COMMIT'); // Commit the transaction
 

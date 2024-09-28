@@ -1,4 +1,5 @@
 const pool = require('../config/psqldb');
+const { encryptSymmetricKey } = require('../utils/helpers');
 // Create a one-on-one chat
 const createOneOnOneChat = async (req, res) => {
     const client = await pool.connect();
@@ -7,6 +8,17 @@ const createOneOnOneChat = async (req, res) => {
 
         const { receiverID } = req.body;
         const senderID = req.user._id;
+
+        if (!receiverID) {
+            await client.query('ROLLBACK'); // Rollback if receiver doesn't exist
+            return res.status(400).json({ message: 'Bad Request: Missing receiverID' });
+        }
+
+        if (senderID === receiverID) {
+            await client.query('ROLLBACK'); // Rollback if receiver doesn't exist
+            return res.status(400).json({ message: 'Bad Request: Cannot create chat with self' });
+        }
+
 
         // Check if the receiver exists
         const query1 = {
@@ -44,18 +56,47 @@ const createOneOnOneChat = async (req, res) => {
             });
         }
 
+
+
         // Create a new individual chat
         const query3 = {
             text: `
-                INSERT INTO IndividualChats (participant1, participant2)
-                VALUES ($1, $2)
-                RETURNING *
-                `,
+            INSERT INTO IndividualChats (participant1, participant2)
+            VALUES ($1, $2)
+            RETURNING *
+            `,
             values: [senderID, receiverID]
         };
 
         const newIndividualChatResponse = await client.query(query3);
         const newIndividualChat = newIndividualChatResponse.rows[0];
+
+
+        // store the symmetric key after encrypting them in the Keys table
+        const publicKeysQuery = {
+            text: `SELECT _id, publicKey FROM Users WHERE _id IN ($1, $2)`,
+            values: [senderID, receiverID],
+        };
+        const publicKeysResponse = await client.query(publicKeysQuery);
+
+        const membersKeys = new Map()
+
+        publicKeysResponse.rows.map(row => {
+            membersKeys.set(row._id, row.publickey);
+        });
+
+        const { encryptedAESKeys } = await encryptSymmetricKey(membersKeys);
+
+        const chatKeysInsertQuery = {
+            text: `
+                INSERT INTO Keys (chat_id, user_id, encrypted_aes_key)
+                VALUES ${Array.from(encryptedAESKeys).map(([_id, encryptedKey], index) => `($1, $${index * 2 + 2}, $${index * 2 + 3})`).join(", ")}
+            `,
+            values: [newIndividualChat._id, ...Array.from(encryptedAESKeys).flatMap(([_id, encryptedKey]) => [_id, encryptedKey])],
+        };
+        
+        await client.query(chatKeysInsertQuery);
+
 
         // Update users' chat lists
         const query4 = {
@@ -91,9 +132,39 @@ const createGroupChat = async (req, res) => {
         const { name, description, members } = req.body;
         const senderID = req.user._id;
 
-        // Ensure the owner is included in the members
+        // Input validation
+        if (!name || !description || !members || !Array.isArray(members) || members.length === 0) {
+            await client.query('ROLLBACK'); // Rollback transaction on error
+            return res.status(400).json({ message: 'Bad Request: Missing required fields' });
+        }
+
+        // Ensure the owner is included in the members and handle duplicates
         if (!members.includes(senderID.toString())) {
             members.push(senderID.toString());
+        }
+
+        // Remove duplicates from members array
+        const uniqueMembers = [...new Set(members)];
+
+        // Check if there are valid members (at least one other than the sender)
+        if (uniqueMembers.length < 2) {
+            await client.query('ROLLBACK'); // Rollback transaction on error
+            return res.status(400).json({ message: 'Bad Request: At least one other member is required' });
+        }
+
+        // Check if all members exist
+        const memberCheckQuery = {
+            text: `SELECT _id FROM Users WHERE _id = ANY($1::uuid[])`,
+            values: [uniqueMembers],
+        };
+        const memberCheckResponse = await client.query(memberCheckQuery);
+
+        const existingMembers = memberCheckResponse.rows.map(row => row._id);
+        const missingMembers = uniqueMembers.filter(id => !existingMembers.includes(id));
+
+        if (missingMembers.length > 0) {
+            await client.query('ROLLBACK'); // Rollback transaction on error
+            return res.status(404).json({ message: 'Not Found: Some members do not exist', missingMembers });
         }
 
         // Create a new group chat
@@ -105,14 +176,47 @@ const createGroupChat = async (req, res) => {
         const response = await client.query(query1);
         const newGroupChat = response.rows[0];
 
+        // Fetch public keys for all members
+        const publicKeysQuery = {
+            text: `SELECT _id, publicKey FROM Users WHERE _id = ANY($1::uuid[])`,
+            values: [uniqueMembers],
+        };
+        const publicKeysResponse = await client.query(publicKeysQuery);
+
+        const membersKeys = new Map()
+
+        publicKeysResponse.rows.map(row => {
+            membersKeys.set(row._id, row.publickey);
+        });
+        // Check if we have valid public keys
+        if (membersKeys.size !== uniqueMembers.length) {
+            await client.query('ROLLBACK'); // Rollback transaction on error
+            return res.status(500).json({ message: 'Internal Server Error: Unable to retrieve all public keys' });
+        }
+        
+        // Encrypt the symmetric keys
+        const { encryptedAESKeys } = await encryptSymmetricKey(membersKeys);
+
+        // Store the encrypted keys in the Keys table
+        const chatKeysInsertQuery = {
+            text: `
+                INSERT INTO Keys (chat_id, user_id, encrypted_aes_key)
+                VALUES ${Array.from(encryptedAESKeys).map(([_id, encryptedKey], index) => `($1, $${index * 2 + 2}, $${index * 2 + 3})`).join(", ")}
+            `,
+            values: [newGroupChat._id, ...Array.from(encryptedAESKeys).flatMap(([_id, encryptedKey]) => [_id, encryptedKey])],
+        };
+
+        await client.query(chatKeysInsertQuery);
+
+
         // Prepare bulk insert for UserChats
-        const userChatsValues = members.map(memberID => `('${memberID}', '${newGroupChat._id}', 'group')`).join(', ');
+        const userChatsValues = uniqueMembers.map(memberID => `('${memberID}', '${newGroupChat._id}', 'group')`).join(', ');
         const query2 = {
             text: `INSERT INTO UserChats (user_id, chat_id, chat_type) VALUES ${userChatsValues}`
         };
 
         // Prepare bulk insert for GroupChatParticipants
-        const groupChatParticipantsValues = members.map(memberID => `('${newGroupChat._id}', '${memberID}')`).join(', ');
+        const groupChatParticipantsValues = uniqueMembers.map(memberID => `('${newGroupChat._id}', '${memberID}')`).join(', ');
         const query3 = {
             text: `INSERT INTO GroupChatParticipants (groupchat_id, user_id) VALUES ${groupChatParticipantsValues}`
         };
@@ -133,6 +237,7 @@ const createGroupChat = async (req, res) => {
         client.release(); // Release the client back to the pool
     }
 };
+
 
 // Get all chats for a user
 const getChats = async (req, res) => {
@@ -231,9 +336,9 @@ const getChats = async (req, res) => {
 
         res.status(200).json({
             message: 'User chats retrieved successfully',
-            data: { 
-                individualChats: individual_chats, 
-                groupChats: group_chats 
+            data: {
+                individualChats: individual_chats,
+                groupChats: group_chats
             }
         });
     } catch (err) {

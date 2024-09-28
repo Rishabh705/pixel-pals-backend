@@ -20,13 +20,12 @@ const io = new Server(expressServer, {
 });
 
 const users = new Map();
-const chatPublicKeys = {};
 
 io.on('connection', (socket) => {
 
     socket.on('register-user', (userId) => {
         users[userId] = socket.id; // Track the socket ID for each user
-        console.log(users);
+        // console.log(users);
         // console.log(`Registered user ${userId} with socket ${socket.id}`);
     });
 
@@ -36,58 +35,29 @@ io.on('connection', (socket) => {
     })
 
     // Joining rooms based on chat type (individual or group)
-    socket.on('join-chat', async (chat_id, type) => {
+    socket.on('join-chat', async (chat_id, userID) => {
         socket.join(chat_id); // Create a room for this chat
-    
-        let publicKeys = {};
-    
+        
         // Fetch public keys from the database based on chat type
-        if (type === 'individual') {
-            const result = await pool.query(
-                `SELECT jsonb_build_object(
-                    k1.user_id, k1.publicKey,
-                    k2.user_id, k2.publicKey
-                ) AS public_key_mapping
-                FROM IndividualChats ic
-                JOIN Keys k1 ON ic.participant1 = k1.user_id
-                JOIN Keys k2 ON ic.participant2 = k2.user_id
-                WHERE ic._id = $1;`,
-                [chat_id]
-            );
-    
-            // Extract public keys from the result
-            publicKeys = result.rows[0]?.public_key_mapping || {};
-        } else if (type === 'group') {
-            const result = await pool.query(
-                'SELECT publicKeys FROM GroupChats WHERE _id = $1',
-                [chat_id]
-            );
-    
-            // Extract public keys from the result
-            publicKeys = result.rows[0]?.publicKeys || {};
-        }
-    
-        // Emit public keys to the connected user
-        socket.emit('others-public-key', publicKeys);
-    
-        // Emit public keys to other connected users in the chat room
-        socket.to(chat_id).emit('others-public-key', publicKeys);
+        const result = await pool.query(
+            `SELECT encrypted_aes_key 
+            FROM Keys 
+            WHERE chat_id = $1 AND user_id = $2`,
+            [chat_id, userID]
+        );
+        
+        // Extract encrypted key from the result
+        const encryptionKey = result.rows[0]?.encrypted_aes_key;
+
+        // Emit user's encryptedAES key to him
+        socket.emit('encryptionKey', encryptionKey);
     });
     
-    
-
-    socket.on('share-public-key', ({ publicKey }) => {
-        // Store the public key associated with the chat ID
-        chatPublicKeys[socket.id] = publicKey;
-        console.log(chatPublicKeys);
-    });
-
     // sending messages
     socket.on('send-message', (data) => {
         const chatType = data.chat_type;
         const chatId = data.chat_id;
         const receiverId = data.receiver._id;
-        console.log(data.message);
         // Handle group chat
         if (chatType === 'group') {
             const room = chatId;

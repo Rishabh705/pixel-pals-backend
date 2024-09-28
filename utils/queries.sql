@@ -7,6 +7,8 @@ CREATE TABLE Users (
     password VARCHAR(255) NOT NULL,
     avatar VARCHAR(255) DEFAULT 'https://github.com/shadcn.png',
     refreshToken VARCHAR(255),
+    publicKey TEXT NOT NULL, -- Base64-encoded public key
+    privateKey TEXT NOT NULL, -- Base64-encoded public key
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -21,15 +23,17 @@ CREATE TABLE Messages (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Table for storing public/private keys
 CREATE TABLE Keys (
     _id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    publicKey TEXT NOT NULL, -- Base64-encoded public key
-    privateKey TEXT NOT NULL, -- Base64-encoded public key
-    user_id UUID REFERENCES Users(_id) ON DELETE CASCADE,
+    chat_id UUID NOT NULL, -- Refers to either individual or group chat
+    chat_type VARCHAR(50) CHECK (chat_type IN ('individual', 'group')), -- Chat type (individual/group)
+    user_id UUID REFERENCES Users(_id) ON DELETE CASCADE, -- The user for whom the AES key is encrypted
+    encrypted_aes_key TEXT NOT NULL, -- The AES key encrypted with the user's public key
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (chat_id, chat_type, user_id) -- Ensure unique encrypted key for each user in a chat
 );
+
 
 CREATE TABLE IndividualChats (
     _id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -50,6 +54,8 @@ CREATE TABLE GroupChats (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+
 
 CREATE TABLE UserChats (
     user_id UUID REFERENCES Users(_id) ON DELETE CASCADE,
