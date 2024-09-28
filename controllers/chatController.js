@@ -250,7 +250,7 @@ const getChats = async (req, res) => {
             return res.status(400).json({ message: 'Bad Request: Missing userID' });
         }
 
-        // Fetch individual chats with 'type' field
+        // Fetch individual chats with 'type' field and encrypted AES keys
         const query1 = {
             text: `
                 SELECT 
@@ -279,13 +279,15 @@ const getChats = async (req, res) => {
                         )
                         ELSE NULL
                     END AS lastMessage,
-                    'individual' AS chat_type
+                    'individual' AS chat_type,
+                    COALESCE(k.encrypted_aes_key, NULL) AS encrypted_aes_key -- Ensure NULL if the key is missing
                 FROM IndividualChats ic
                 JOIN UserChats uc ON uc.chat_id = ic._id
                 JOIN Users u1 ON ic.participant1 = u1._id
                 JOIN Users u2 ON ic.participant2 = u2._id
                 LEFT JOIN Messages m ON ic.lastMessage = m._id
                 LEFT JOIN Users u3 ON m.sender = u3._id
+                LEFT JOIN Keys k ON k.chat_id = ic._id AND k.user_id = $1 -- Join with Keys table
                 WHERE uc.user_id = $1 AND uc.chat_type = 'individual';
             `,
             values: [userID]
@@ -294,7 +296,7 @@ const getChats = async (req, res) => {
         const individualChatsResponse = await client.query(query1);
         const individual_chats = individualChatsResponse.rows;
 
-        // Fetch group chats with 'type' field
+        // Fetch group chats with 'type' field and encrypted AES keys
         const query2 = {
             text: `
                 SELECT 
@@ -320,12 +322,14 @@ const getChats = async (req, res) => {
                         )
                         ELSE NULL
                     END AS lastMessage,
-                    'group' AS chat_type
+                    'group' AS chat_type,
+                    COALESCE(k.encrypted_aes_key, NULL) AS encrypted_aes_key -- Ensure NULL if the key is missing
                 FROM GroupChats gc
                 JOIN UserChats uc ON uc.chat_id = gc._id
                 JOIN Users u ON u._id = gc.owner
                 LEFT JOIN Messages m ON gc.lastMessage = m._id
                 LEFT JOIN Users u3 ON m.sender = u3._id
+                LEFT JOIN Keys k ON k.chat_id = gc._id AND k.user_id = $1 -- Join with Keys table
                 WHERE uc.user_id = $1 AND uc.chat_type = 'group';
             `,
             values: [userID]
@@ -334,11 +338,12 @@ const getChats = async (req, res) => {
         const groupChatsResponse = await client.query(query2);
         const group_chats = groupChatsResponse.rows;
 
+        // Send the response with individual and group chats, handling cases where no chats exist
         res.status(200).json({
             message: 'User chats retrieved successfully',
             data: {
-                individualChats: individual_chats,
-                groupChats: group_chats
+                individualChats: individual_chats.length ? individual_chats : [], // Return empty array if no chats
+                groupChats: group_chats.length ? group_chats : [], // Return empty array if no group chats
             }
         });
     } catch (err) {
@@ -348,6 +353,7 @@ const getChats = async (req, res) => {
         client.release(); // Release the client back to the pool
     }
 };
+
 
 
 
