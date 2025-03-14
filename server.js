@@ -3,12 +3,15 @@ const express = require('express');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const path = require('path');
-const { logger } = require('./middleware/logEvents');
+const { logger, httpLogger } = require('./middleware/logger');
 const corsOptions = require('./config/corsOptions');
 const PORT = process.env.PORT || 3500;
 const verifyJWT = require('./middleware/verifyJWT');
 const cookieParser = require('cookie-parser');
 const pool = require('./config/psqldb');
+const fs = require('fs');
+const errorHandler = require('./middleware/errorHandler');
+const cacheService = require('./utils/redis'); 
 const app = express();
 
 const expressServer = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
@@ -19,14 +22,15 @@ const io = new Server(expressServer, {
     },
 });
 
-const users = new Map();
-
 io.on('connection', (socket) => {
 
-    socket.on('register-user', (userId) => {
-        users[userId] = socket.id; // Track the socket ID for each user
-        // console.log(users);
-        // console.log(`Registered user ${userId} with socket ${socket.id}`);
+    socket.on('register-user', async (userId) => {
+        try {
+            // Socket IDs should have short TTL as they change frequently
+            await cacheService.set(`user_socket:${userId}`, socket.id, 7200); // 2 hours
+        } catch (error) {
+            console.error('Error registering user:', error);
+        }
     });
 
     socket.on('drawing', data => {
@@ -36,39 +40,51 @@ io.on('connection', (socket) => {
 
     // Joining rooms based on chat type (individual or group)
     socket.on('join-chat', async (chat_id, userID) => {
-        socket.join(chat_id); // Create a room for this chat
-        
-        // Fetch public keys from the database based on chat type
-        const result = await pool.query(
-            `SELECT encrypted_aes_key 
-            FROM Keys 
-            WHERE chat_id = $1 AND user_id = $2`,
-            [chat_id, userID]
-        );
-        
-        // Extract encrypted key from the result
-        const encryptionKey = result.rows[0]?.encrypted_aes_key;
-
-        // Emit user's encryptedAES key to him
-        socket.emit('encryptionKey', encryptionKey);
+        try {
+            socket.join(chat_id);
+            
+            // Add caching here - encryption keys rarely change
+            const cacheKey = `encryption_key:${chat_id}:${userID}`;
+            let encryptionKey = await cacheService.get(cacheKey);
+            
+            if (!encryptionKey) {
+                const result = await pool.query(
+                    `SELECT encrypted_aes_key FROM Keys WHERE chat_id = $1 AND user_id = $2`,
+                    [chat_id, userID]
+                );
+                encryptionKey = result.rows[0]?.encrypted_aes_key;
+                
+                if (encryptionKey) {
+                    // Cache for a reasonable duration (e.g., 1 hour)
+                    await cacheService.set(cacheKey, encryptionKey, 3600);
+                }
+            }
+    
+            socket.emit('encryptionKey', encryptionKey);
+        } catch (error) {
+            console.error('Error in join-chat:', error);
+        }
     });
     
     // sending messages
-    socket.on('send-message', (data) => {
-        const chatType = data.chat_type;
-        const chatId = data.chat_id;
-        const receiverId = data.receiver._id;
-        // Handle group chat
-        if (chatType === 'group') {
-            const room = chatId;
-
-            // Broadcast the message to all connected users in the group chat room
-            socket.to(room).emit('receive-message', data);
-        }
-        // Handle private chat
-        else if (chatType === 'individual' && users[receiverId]) {
-            // Send the message directly to the receiver if they are online
-            socket.to(users[receiverId]).emit('receive-message', data);
+    socket.on('send-message', async (data) => {
+        try {
+            const chatType = data.chat_type;
+            const chatId = data.chat_id;
+            const receiverId = data.receiver._id;
+    
+            if (chatType === 'group') {
+                socket.to(chatId).emit('receive-message', data);
+            } 
+            // Handle private chat
+            else if (chatType === 'individual') {
+                const receiverSocketId = await cacheService.get(`user_socket:${receiverId}`);
+                if (receiverSocketId) {
+                    socket.to(receiverSocketId).emit('receive-message', data);
+                }
+            }
+        } catch (error) {
+            console.error('Error in send-message:', error);
         }
     });
 
@@ -83,18 +99,31 @@ io.on('connection', (socket) => {
     });
 
     // Handling disconnections
-    socket.on('disconnect', () => {
-        // Clean up if needed
-        Object.keys(users).forEach((userId) => {
-            if (users[userId] === socket.id) {
-                delete users[userId];
-            }
-        });
+    socket.on('disconnect', async () => {
+        try {
+            // Find and remove the user's socket mapping from cache
+            const pattern = 'user_socket:*';
+            await cacheService.invalidatePattern(pattern);
+            
+            logger.info(`Socket ${socket.id} disconnected and cache cleaned`);
+        } catch (error) {
+            logger.error('Error handling disconnect:', error);
+        }
     });
 });
 
-// Custom middlewares
-app.use(logger);
+// Create logs directory if it doesn't exist
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir);
+  logger.info('Logs directory created');
+}
+
+// Middleware for logging HTTP requests
+app.use(httpLogger);
+
+// Custom error handler
+app.use(errorHandler);
 
 // Third-party middlewares
 app.use(cors(corsOptions));
@@ -110,7 +139,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Routes
 app.use('/', require('./routes/root'));
 app.use('/api/auth', require('./routes/api/auth'));
-app.use('/refresh', require('./routes/refresh'));
 
 app.use(verifyJWT);
 app.use('/api/chats', require('./routes/api/chats'));

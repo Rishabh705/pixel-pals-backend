@@ -11,4 +11,10 @@ router.route('/register')
 router.route('/logout')
     .get(authController.logout)
     
+router.route('/refresh-access-token')
+    .get(authController.refreshAccessToken)
+
+router.route('/rotate-token')
+    .get(authController.rotateTokens)
+    
 module.exports = router

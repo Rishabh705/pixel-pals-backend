@@ -15,18 +15,12 @@ async function generateAESKey() {
 // Encrypt the AES key for each participant using their public RSA key
 async function encryptSymmetricKey(publicKeysBase64Map) {
     // Generate a single AES key for the group
-    const symmetricKey = await subtle.generateKey(
-        {
-            name: 'AES-GCM',
-            length: 256 // AES-256
-        },
-        true, // Extractable
-        ['encrypt', 'decrypt'] // Usages
-    );
+    const symmetricKey = await generateAESKey();
 
     // Export the AES key for encryption with RSA
     const exportedKey = await subtle.exportKey("raw", symmetricKey);
 
+    // map to store the encrypted AES keys for each participant
     const encryptedAESKeys = new Map();
 
     for (const id_key_pair of publicKeysBase64Map) {

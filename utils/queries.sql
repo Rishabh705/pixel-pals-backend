@@ -6,9 +6,8 @@ CREATE TABLE Users (
     email VARCHAR(255) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     avatar VARCHAR(255) DEFAULT 'https://github.com/shadcn.png',
-    refreshToken VARCHAR(255),
+    refreshToken TEXT,
     publicKey TEXT NOT NULL, -- Base64-encoded public key
-    privateKey TEXT NOT NULL, -- Base64-encoded public key
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -49,7 +48,6 @@ CREATE TABLE GroupChats (
     name VARCHAR(255) NOT NULL,
     description VARCHAR(255),
     avatar VARCHAR(255) DEFAULT 'https://github.com/shadcn.png',
-    owner UUID REFERENCES Users(_id) ON DELETE CASCADE,
     lastMessage UUID REFERENCES Messages(_id) ON DELETE SET NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
@@ -79,14 +77,10 @@ CREATE TABLE IndividualChatMessages (
 CREATE TABLE GroupChatParticipants (
     groupchat_id UUID REFERENCES GroupChats(_id) ON DELETE CASCADE,
     user_id UUID REFERENCES Users(_id) ON DELETE CASCADE,
+    role TEXT CHECK (role IN ('member', 'admin')) DEFAULT 'member',
     PRIMARY KEY (groupchat_id, user_id)
 );
 
-CREATE TABLE GroupChatAdmins (
-    groupchat_id UUID REFERENCES GroupChats(_id) ON DELETE CASCADE,
-    admin_id UUID REFERENCES Users(_id) ON DELETE CASCADE,
-    PRIMARY KEY (groupchat_id, admin_id)
-);
 
 CREATE TABLE GroupChatMessages (
     groupchat_id UUID REFERENCES GroupChats(_id) ON DELETE CASCADE,
