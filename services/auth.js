@@ -22,31 +22,30 @@ class AuthService {
         if (!validation.isValid) {
             throw new CustomError(Object.values(validation.errors)[0], 401);
         }
-
+    
         return await userRepository.withTransaction(async (client) => {
-            const user = await userRepository.findUserByEmail(email, client);
+            const user = await userRepository.findUserByEmailAndReturnPubKey(email, client);
             if (!user || !(await bcrypt.compare(password, user.password))) {
                 throw new CustomError('Invalid credentials', 401);
             }
-
+    
             const tokens = this._generateTokens(user);
+            
+            // Update refresh token (which will also invalidate related caches)
             await userRepository.updateRefreshToken(user.email, tokens.refreshToken, client);
 
-            let userPublicKey = await cacheService.get(`user:publicKey:${user._id}`);
-            if (!userPublicKey) {
-                userPublicKey = await userRepository.findUserPublicKey(user._id, client);
-                if (userPublicKey) {
-                    await cacheService.set(`user:publicKey:${user._id}`, userPublicKey, 3600);
-                }
-            }
+            // if user exists, cache it
+            if (user) {
+                const { password, ...userWithoutPassword } = user;
 
-            if (!userPublicKey) {
-                throw new CustomError('Failed to retrieve user public key', 500);
+                const userCacheKey = userRepository.generateUserCacheKey(email);
+                // Cache the user with proper TTL
+                await cacheService.set(userCacheKey, userWithoutPassword, userRepository.USER_CACHE_TTL);
             }
-
+    
             return {
                 ...tokens,
-                publicKey: userPublicKey
+                publicKey: user.publicKey
             };
         });
     }
@@ -87,6 +86,14 @@ class AuthService {
                 ]);
             }
         });
+    }
+
+    async getPublicKey(email) {
+        const user = await userRepository.findUserByEmail(email);
+        if (!user) {
+            throw new CustomError('User not found', 404);
+        }
+        return user.publickey;
     }
 
     // Only refresh access token, keeping the same refresh token

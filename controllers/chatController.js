@@ -7,9 +7,10 @@ class ChatController {
     async createOneOnOneChat(req, res, next) {
         try {
             const { receiverID } = req.body;
+            const { aesKeys } = req.body;
             const senderId = req.user._id;
 
-            const result = await ChatService.createOneOnOneChat(senderId, receiverID);
+            const result = await ChatService.createOneOnOneChat(senderId, receiverID, aesKeys);
 
             // If the chat already exists, decide on a different status code
             const statusCode = result.created ? 201 : 200;
@@ -28,8 +29,9 @@ class ChatController {
         try {
             const { name, description, members } = req.body;
             const senderID = req.user._id;
+            const { aesKeys } = req.body;
 
-            const result = await ChatService.createGroupChat(name, description, members, senderID);
+            const result = await ChatService.createGroupChat(name, description, members, senderID, aesKeys);
 
             // If the chat already exists, decide on a different status code
             const statusCode = result.created ? 201 : 200;

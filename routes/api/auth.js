@@ -10,6 +10,9 @@ router.route('/register')
 
 router.route('/logout')
     .get(authController.logout)
+
+router.route('/public-key')
+    .get(authController.getPublicKey)
     
 router.route('/refresh-access-token')
     .get(authController.refreshAccessToken)

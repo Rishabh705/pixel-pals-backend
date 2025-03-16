@@ -79,6 +79,7 @@ io.on('connection', (socket) => {
             // Handle private chat
             else if (chatType === 'individual') {
                 const receiverSocketId = await cacheService.get(`user_socket:${receiverId}`);
+                console.log(data);
                 if (receiverSocketId) {
                     socket.to(receiverSocketId).emit('receive-message', data);
                 }
@@ -105,7 +106,7 @@ io.on('connection', (socket) => {
             const pattern = 'user_socket:*';
             await cacheService.invalidatePattern(pattern);
             
-            logger.info(`Socket ${socket.id} disconnected and cache cleaned`);
+            logger.info(`Socket ${socket.id} disconnected`);
         } catch (error) {
             logger.error('Error handling disconnect:', error);
         }
@@ -120,10 +121,7 @@ if (!fs.existsSync(logsDir)) {
 }
 
 // Middleware for logging HTTP requests
-app.use(httpLogger);
-
-// Custom error handler
-app.use(errorHandler);
+app.use(httpLogger);    
 
 // Third-party middlewares
 app.use(cors(corsOptions));
@@ -144,7 +142,18 @@ app.use(verifyJWT);
 app.use('/api/chats', require('./routes/api/chats'));
 app.use('/api/contacts', require('./routes/api/contacts'));
 
+// Custom error handler
+app.use(errorHandler);
+
 // Error page
 app.get('/*', (req, res) => {
-    res.status(404).sendFile(path.join(__dirname, 'views', '404.html'));
-});
+    // Only send 404 page for non-API routes (i.e., routes not starting with /api/)
+    if (!req.originalUrl.startsWith('/api')) {
+        return res.status(404).sendFile(path.join(__dirname, 'views', '404.html'));
+    } else {
+        return res.status(404).json({
+            success: false,
+            message: 'Not Found'
+        });
+    }
+}); 

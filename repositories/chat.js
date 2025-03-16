@@ -23,21 +23,10 @@ class ChatRepository {
         return `user:chats:${chatType}:${userId}`;
     }
 
-    async storeChatKeys(chatId, participantIDs, client) {
-        // Get the public keys for all participants using the ANY operator
-        const publicKeysQuery = {
-            text: `SELECT _id, publicKey FROM Users WHERE _id = ANY($1)`,
-            values: [participantIDs],
-        };
-        const publicKeysResponse = await client.query(publicKeysQuery);
+    async storeChatKeys(chatId, jsonkeys, client) {
         
-        const membersKeys = new Map();
-        publicKeysResponse.rows.forEach(row => {
-            membersKeys.set(row._id, row.publickey);
-        });
+        const encryptedAESKeys = new Map(Object.entries(jsonkeys));
         
-        // Encrypt the symmetric key for each member
-        const { encryptedAESKeys } = await encryptSymmetricKey(membersKeys);
 
         // Build the insertion query dynamically for each participant
         const valuesClause = Array.from(encryptedAESKeys)
@@ -58,9 +47,28 @@ class ChatRepository {
     async createOneOnOneChat(participant1Id, participant2Id, client = pool) {
         const query = {
             text: `
-            INSERT INTO IndividualChats (participant1, participant2)
-            VALUES ($1, $2)
-            RETURNING *
+                WITH inserted_chat AS (
+                    INSERT INTO IndividualChats (participant1, participant2)
+                    VALUES ($1, $2)
+                    RETURNING _id, participant1, participant2, created_at
+                )
+                SELECT
+                    ic._id,
+                    jsonb_build_object(
+                        '_id', ic.participant1,
+                        'username', u1.username,
+                        'avatar', u1.avatar
+                    ) AS participant1,
+                    jsonb_build_object(
+                        '_id', ic.participant2,
+                        'username', u2.username,
+                        'avatar', u2.avatar
+                    ) AS participant2,
+                    '[]'::jsonb AS messages,
+                    ic.created_at AS created_at
+                FROM inserted_chat ic
+                LEFT JOIN Users u1 ON ic.participant1 = u1._id
+                LEFT JOIN Users u2 ON ic.participant2 = u2._id;
             `,
             values: [participant1Id, participant2Id]
         };
@@ -71,7 +79,6 @@ class ChatRepository {
         // Cache the new chat by ID
         const cacheKey = this.generateChatCacheKey(newChat._id, 'individual');
         await cacheService.set(cacheKey, newChat, this.INDIVIDUAL_CHAT_CACHE_TTL);
-
         return newChat;
     }
 
@@ -328,9 +335,9 @@ class ChatRepository {
         const cacheKey = this.generateChatCacheKey(chatId, 'individual');
 
         // Try to get from cache first
-        const cachedChat = await cacheService.get(cacheKey);
+        const cachedChat = await cacheService.get(cacheKey); 
         if (cachedChat) {
-            if(userID !== cachedChat.participant1._id && userID !== cachedChat.participant2._id)
+            if(userID !== cachedChat.participant1._id && userID !== cachedChat.participant2._id) 
                 throw new CustomError('Unauthorized access', 403);
             return cachedChat; 
         }
@@ -388,7 +395,6 @@ class ChatRepository {
         if (chat) {
             await cacheService.set(cacheKey, chat, this.INDIVIDUAL_CHAT_CACHE_TTL);
         }
-
         return chat;
     }
 
@@ -399,6 +405,7 @@ class ChatRepository {
         // Try to get from cache first
         const cachedChat = await cacheService.get(cacheKey);
         if (cachedChat) {
+            console.log(cachedChat.members);
             const memberIds = cachedChat.members.map(member => member._id);
             if (!memberIds.includes(userID)) {
                 throw new CustomError('Unauthorized access', 403);
@@ -441,7 +448,6 @@ class ChatRepository {
             LEFT JOIN GroupChatParticipants gcp ON gcp.groupchat_id = gc._id
             LEFT JOIN GroupChatMessages gcm ON gcm.groupchat_id = gc._id
             LEFT JOIN Messages m2 ON gcm.message_id = m2._id
-            LEFT JOIN Users u ON u._id = gc.owner
             LEFT JOIN Users u2 ON gcp.user_id = u2._id  -- Join to get participant details
             LEFT JOIN Users u4 ON m2.sender = u4._id
             WHERE gc._id = $1
@@ -475,7 +481,7 @@ class ChatRepository {
             values: [messageId, message, senderId, chatId, chatType]
         };
 
-        const { rows } = await client.query(query);
+        const { rows } = await client.query(query); 
 
         return rows[0];
     }

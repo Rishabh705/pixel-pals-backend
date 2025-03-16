@@ -3,7 +3,7 @@ const CustomError = require('../utils/Error');
 const userRepository = require('../repositories/auth');
 
 class ChatService {
-    async createOneOnOneChat(senderID, receiverID) {
+    async createOneOnOneChat(senderID, receiverID, aesKeys) {
 
         if (!receiverID) {
             throw new CustomError('Missing receiverID', 400);
@@ -30,11 +30,10 @@ class ChatService {
             const newChat = await chatRepository.createOneOnOneChat(senderID, receiverID, client);
 
             // Store the encrypted symmetric key for the new chat
-            
-            // TO Change: you must generate aes and encrypt it at client side
-            await chatRepository.storeChatKeys(newChat._id, [senderID, receiverID], client);
-
-            await chatRepository.addUserChats(newChat._id, [senderID, receiverID], 'individual', client);
+            await Promise.all([
+                chatRepository.storeChatKeys(newChat._id, aesKeys, client),
+                chatRepository.addUserChats(newChat._id, [senderID, receiverID], 'individual', client)
+            ]);
 
             return {
                 created: true,
@@ -43,7 +42,7 @@ class ChatService {
         });
     }
 
-    async createGroupChat(name, description, members, senderID) {
+    async createGroupChat(name, description, members, senderID, aesKeys) {
         // Input validation
         if (!name || !members || !Array.isArray(members) || members.length === 0) {
             throw new CustomError('Required fields: name, members', 400);
@@ -83,9 +82,10 @@ class ChatService {
             const newChat = await chatRepository.createGroupChat(name, description, senderID, uniqueMembers, client);
 
             // Add chat reference to each user's chat list
-            await chatRepository.addUserChats(newChat._id, uniqueMembers, 'group', client);
-
-            await chatRepository.storeChatKeys(newChat._id, uniqueMembers, client);
+            await Promise.all([
+                chatRepository.addUserChats(newChat._id, uniqueMembers, 'group', client),
+                chatRepository.storeChatKeys(newChat._id, aesKeys, client)
+            ]);
 
             return {
                 created: true,
@@ -144,7 +144,6 @@ class ChatService {
                     type: 'group',
                     name: chat.name,
                     description: chat.description,
-                    owner: chat.owner,
                     messages: chat.messages || [],
                     created_at: chat.created_at
                 };
@@ -166,12 +165,9 @@ class ChatService {
             throw new CustomError('Required fields: message, chatId, senderID, messageID', 400);
         }
 
-        if(senderID !== req.user._id)
-            throw new CustomError('Unauthorized access', 403);
-
         return await userRepository.withTransaction(async (client) => {
             // Check if the chat exists
-            const chat = await this.getChat(chatId);
+            const chat = await this.getChat(chatId, senderID);
             if (!chat) {
                 throw new CustomError('Chat not found', 404);
             }

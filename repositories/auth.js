@@ -24,12 +24,8 @@ class UserRepository {
     }
 
     // Cache key generators
-    generateUserCacheKey(data, purpose='email') {
+    generateUserCacheKey(data, purpose = 'email') {
         return `user:${purpose}:${data}`;
-    }
-
-    generatePublicKeyCacheKey(userId) {
-        return `user:publicKey:${userId}`;
     }
 
     // Enhanced invalidation patterns
@@ -38,8 +34,6 @@ class UserRepository {
             // Invalidate user cache
             cacheService.invalidate(this.generateUserCacheKey(email)),
             cacheService.invalidate(this.generateUserCacheKey(userId, "id")),
-            // Invalidate public key cache
-            cacheService.invalidate(this.generatePublicKeyCacheKey(userId)),
             // Invalidate any session caches
             cacheService.invalidatePattern(`session:${userId}:*`)
         ]);
@@ -47,7 +41,7 @@ class UserRepository {
 
     async findUserByID(id, client = pool) {
         const cacheKey = this.generateUserCacheKey(id, "id");
-        
+
         let user = await cacheService.get(cacheKey);
         if (user) {
             return user;
@@ -66,29 +60,29 @@ class UserRepository {
 
         return user;
     }
-    
+
     async findUsersByIds(userIds, client = pool) {
         // First check cache for all users
         const cacheKeys = userIds.map(id => this.generateUserCacheKey(id, "id"));
         const cachedUsers = await Promise.all(
             cacheKeys.map(key => cacheService.get(key))
         );
-    
+
         // Filter out IDs that need to be fetched from DB
         const uncachedIds = userIds.filter((id, index) => !cachedUsers[index]);
-        
+
         let dbUsers = [];
         if (uncachedIds.length > 0) {
             const query = {
-                text: 'SELECT * FROM users WHERE _id = ANY($1::uuid[])',
+                text: 'SELECT _id, username, email, avatar, refreshToken, publicKey FROM Users WHERE _id = ANY($1::uuid[])',
                 values: [uncachedIds]
             };
             const { rows } = await client.query(query);
             dbUsers = rows;
-    
+
             // Cache the newly fetched users
             await Promise.all(
-                dbUsers.map(user => 
+                dbUsers.map(user =>
                     cacheService.set(
                         this.generateUserCacheKey(user._id, "id"),
                         user,
@@ -97,7 +91,7 @@ class UserRepository {
                 )
             );
         }
-    
+
         // Combine cached and DB users
         return userIds.map(id => {
             const cachedUser = cachedUsers[userIds.indexOf(id)];
@@ -108,14 +102,14 @@ class UserRepository {
 
     async findUserByEmail(email, client = pool) {
         const cacheKey = this.generateUserCacheKey(email);
-        
+
         let user = await cacheService.get(cacheKey);
         if (user) {
             return user;
         }
 
         const query = {
-            text: 'SELECT * FROM users WHERE email = $1',
+            text: 'SELECT _id, username, email, avatar, refreshToken, publicKey FROM Users WHERE email = $1',
             values: [email]
         };
         const { rows } = await client.query(query);
@@ -140,67 +134,42 @@ class UserRepository {
         }
     }
 
-    async findUserPublicKey(userId, client = pool) {
-        const cacheKey = this.generatePublicKeyCacheKey(userId);
-
-        let publicKey = await cacheService.get(cacheKey);
-        if (publicKey) {
-            return publicKey;
-        }
-
+    async findUserByEmailAndReturnPubKey(email, client = pool) {
+        // fetch fresh user data from DB at login
         const query = {
-            text: 'SELECT publicKey FROM users WHERE _id = $1',
-            values: [userId]
+            text: 'SELECT * FROM users WHERE email = $1',
+            values: [email]
         };
         const { rows } = await client.query(query);
-        publicKey = rows[0]?.publickey;
+        const user = rows[0];
 
-        if (publicKey) {
-            await cacheService.set(cacheKey, publicKey, this.PUBLIC_KEY_CACHE_TTL);
-        }
-
-        return publicKey;
+        return user;
     }
 
     async createUser(userData, client = pool) {
         const { username, email, hashedPassword, publicKey } = userData;
         const query = {
-            text: 'INSERT INTO users(username, email, password, refreshToken, publicKey) VALUES($1, $2, $3, $4, $5) RETURNING *',
+            text: 'INSERT INTO users(username, email, password, refreshToken, publicKey) VALUES($1, $2, $3, $4, $5) RETURNING _id, username, email, avatar, refreshToken, publicKey',
             values: [username, email, hashedPassword, '', publicKey]
         };
         const { rows } = await client.query(query);
         const newUser = rows[0];
 
-        await Promise.all([
-            cacheService.set(
-                this.generateUserCacheKey(email),
-                newUser,
-                this.USER_CACHE_TTL
-            ),
-            cacheService.set(
-                this.generatePublicKeyCacheKey(newUser._id),
-                publicKey,
-                this.PUBLIC_KEY_CACHE_TTL
-            )
-        ]);
+        await cacheService.set(
+            this.generateUserCacheKey(email),
+            newUser,
+            this.USER_CACHE_TTL
+        );
         return newUser;
     }
 
     async findUserByRefreshToken(refreshToken, client = pool) {
         const query = {
-            text: 'SELECT * FROM users WHERE refreshToken = $1',
+            text: 'SELECT _id FROM users WHERE refreshToken = $1',
             values: [refreshToken]
         };
         const { rows } = await client.query(query);
         const user = rows[0];
-
-        if (user) {
-            await cacheService.set(
-                this.generateUserCacheKey(user.email),
-                user,
-                this.USER_CACHE_TTL
-            );
-        }
 
         return user;
     }
@@ -211,7 +180,7 @@ class UserRepository {
             values: ['', userId]
         };
         const { rows } = await client.query(query);
-        
+
         if (rows[0]) {
             await this.invalidateRelatedCaches(userId, rows[0].email);
         }

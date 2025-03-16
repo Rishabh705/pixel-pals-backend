@@ -80,6 +80,25 @@ class AuthController {
         }
     }
 
+    async getPublicKey(req, res, next) {
+        try {
+            const email = req.query.email;
+            if(!email) {
+                throw new CustomError('Reciever Email id required', 400);
+            }
+            const publicKey = await authService.getPublicKey(email);
+            res.status(200).json({
+                status: 'success',
+                data: {
+                    publicKey
+                }
+            });
+        } catch (error) {
+            logger.error('Get public key error:', { error: error.message });
+            next(error);
+        }
+    }
+
     async refreshAccessToken(req, res, next) {
         try {
             const refreshToken = req.cookies?.jwt;

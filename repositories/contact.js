@@ -38,7 +38,7 @@ class ContactRepository {
         // If not cached, fetch from database
         const query = {
             text: `
-                SELECT u._id, u.username, u.avatar
+                SELECT u._id, u.username, u.avatar, u.email
                 FROM Users u
                 JOIN UserSavedContacts usc ON usc.contact_id = u._id
                 WHERE usc.user_id = $1
