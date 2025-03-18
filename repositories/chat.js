@@ -1,6 +1,5 @@
 const pool = require('../config/psqldb');
 const cacheService = require('../utils/redis');
-const { encryptSymmetricKey } = require('../utils/helpers');
 const CustomError = require('../utils/Error');
 
 class ChatRepository {
@@ -47,39 +46,16 @@ class ChatRepository {
     async createOneOnOneChat(participant1Id, participant2Id, client = pool) {
         const query = {
             text: `
-                WITH inserted_chat AS (
-                    INSERT INTO IndividualChats (participant1, participant2)
-                    VALUES ($1, $2)
-                    RETURNING _id, participant1, participant2, created_at
-                )
-                SELECT
-                    ic._id,
-                    jsonb_build_object(
-                        '_id', ic.participant1,
-                        'username', u1.username,
-                        'avatar', u1.avatar
-                    ) AS participant1,
-                    jsonb_build_object(
-                        '_id', ic.participant2,
-                        'username', u2.username,
-                        'avatar', u2.avatar
-                    ) AS participant2,
-                    '[]'::jsonb AS messages,
-                    ic.created_at AS created_at
-                FROM inserted_chat ic
-                LEFT JOIN Users u1 ON ic.participant1 = u1._id
-                LEFT JOIN Users u2 ON ic.participant2 = u2._id;
+                INSERT INTO IndividualChats (participant1, participant2)
+                VALUES ($1, $2)
+                RETURNING _id;
             `,
             values: [participant1Id, participant2Id]
         };
         
         const { rows } = await client.query(query);
         const newChat = rows[0];
-
-        // Cache the new chat by ID
-        const cacheKey = this.generateChatCacheKey(newChat._id, 'individual');
-        await cacheService.set(cacheKey, newChat, this.INDIVIDUAL_CHAT_CACHE_TTL);
-        return newChat;
+        return newChat; 
     }
 
     async createGroupChat(name, description, senderID, members, client = pool) {
@@ -87,7 +63,7 @@ class ChatRepository {
             text: `
                     INSERT INTO GroupChats (name, description)
                     VALUES ($1, $2)
-                    RETURNING *
+                    RETURNING _id
                 `,
             values: [name, description]
         };
@@ -102,14 +78,8 @@ class ChatRepository {
             return {id: member, role: 'member'}
         });
 
-        const memberData = await this.updateGroupParticipants(newChat._id, paticipants, client);
-        newChat.members = memberData;
-
-        /** cache the created group chat */
-        const chatCacheKey = this.generateChatCacheKey(newChat._id, 'group');
-
-        await cacheService.set(chatCacheKey, newChat, this.GROUP_CHAT_CACHE_TTL);
-
+        await this.updateGroupParticipants(newChat._id, paticipants, client);
+        
         return newChat;
     }
 
@@ -405,7 +375,6 @@ class ChatRepository {
         // Try to get from cache first
         const cachedChat = await cacheService.get(cacheKey);
         if (cachedChat) {
-            console.log(cachedChat.members);
             const memberIds = cachedChat.members.map(member => member._id);
             if (!memberIds.includes(userID)) {
                 throw new CustomError('Unauthorized access', 403);
@@ -419,11 +388,6 @@ class ChatRepository {
                 gc._id AS group_chat_id,
                 gc.name,
                 gc.description,
-                jsonb_build_object(
-                    '_id', u._id,
-                    'username', u.username,
-                    'avatar', u.avatar
-                ) AS owner,
                 jsonb_agg(
                     jsonb_build_object(
                         '_id', gcp.user_id,
@@ -454,9 +418,6 @@ class ChatRepository {
             AND EXISTS (SELECT 1 FROM GroupChatParticipants gcp WHERE gcp.groupchat_id = gc._id AND gcp.user_id = $2)
             GROUP BY
                 gc._id,
-                u._id,
-                u.username,
-                u.avatar,
                 gc.name,
                 gc.description,
                 gc.created_at;

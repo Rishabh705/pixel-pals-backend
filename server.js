@@ -74,12 +74,12 @@ io.on('connection', (socket) => {
             const receiverId = data.receiver._id;
     
             if (chatType === 'group') {
+                console.log(data);
                 socket.to(chatId).emit('receive-message', data);
             } 
             // Handle private chat
             else if (chatType === 'individual') {
                 const receiverSocketId = await cacheService.get(`user_socket:${receiverId}`);
-                console.log(data);
                 if (receiverSocketId) {
                     socket.to(receiverSocketId).emit('receive-message', data);
                 }

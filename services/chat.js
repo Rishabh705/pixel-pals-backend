@@ -34,7 +34,7 @@ class ChatService {
                 chatRepository.storeChatKeys(newChat._id, aesKeys, client),
                 chatRepository.addUserChats(newChat._id, [senderID, receiverID], 'individual', client)
             ]);
-
+           
             return {
                 created: true,
                 data: newChat,
@@ -56,9 +56,9 @@ class ChatService {
         // Remove duplicates from members array
         const uniqueMembers = [...new Set(members)];
 
-        // Check if there are valid members (at least one other than the sender)
-        if (uniqueMembers.length < 2) {
-            throw new CustomError('At least one other member is required', 400);
+        // Check if there are valid members (at least 3)
+        if (uniqueMembers.length < 3) {
+            throw new CustomError('At least 3 members are required', 400);
         }
 
         return await userRepository.withTransaction(async (client) => {
@@ -72,7 +72,6 @@ class ChatService {
 
             const existingChat = await chatRepository.findGroupChatByMembers(uniqueMembers, client);
             if (existingChat) {
-                console.log(existingChat)
                 return {
                     created: false,
                     data: existingChat,

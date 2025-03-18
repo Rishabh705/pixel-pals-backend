@@ -1,7 +1,4 @@
-const pool = require('../config/psqldb');
-const { encryptSymmetricKey } = require('../utils/helpers');
 const ChatService = require('../services/chat');
-const CustomError = require('../utils/Error');
 
 class ChatController {
     async createOneOnOneChat(req, res, next) {
