@@ -34,7 +34,7 @@ class ChatService {
                 chatRepository.storeChatKeys(newChat._id, aesKeys, client),
                 chatRepository.addUserChats(newChat._id, [senderID, receiverID], 'individual', client)
             ]);
-           
+
             return {
                 created: true,
                 data: newChat,
@@ -75,7 +75,7 @@ class ChatService {
                 return {
                     created: false,
                     data: existingChat,
-                }; 
+                };
             }
 
             const newChat = await chatRepository.createGroupChat(name, description, senderID, uniqueMembers, client);
@@ -93,7 +93,7 @@ class ChatService {
         })
     }
 
-    /* TODO: logic left */
+    /* TODO: logic left for updating the members*/
     async updateGroupChatParticipants(chatId, members) {
         if (!chatId || !members || !Array.isArray(members) || members.length === 0) {
             throw new CustomError('Required fields: name, members', 400);
@@ -106,57 +106,50 @@ class ChatService {
         if (!userId) {
             throw new CustomError('Missing userId', 400);
         }
-        return await userRepository.withTransaction(async (client) => {
+        const [individualChats, groupChats] = await Promise.all([
+            chatRepository.getUserIndividualChats(userId),
+            chatRepository.getUserGroupChats(userId)
+        ]);
 
-            // Get individual chats
-            const individualChats = await chatRepository.getUserIndividualChats(userId, client);
-
-            // Get group chats
-            const groupChats = await chatRepository.getUserGroupChats(userId, client);
-
-            return {
-                individualChats: individualChats || [],
-                groupChats: groupChats || []
-            };
-        });
+        return {
+            individualChats: individualChats ?? [],
+            groupChats: groupChats ?? []
+        };
     }
 
     async getChat(chatId, userID) {
         if (!chatId) {
             throw new CustomError('Missing chatId', 400);
         }
+        const [individualChat, groupChat] = await Promise.all([
+            chatRepository.getIndividualChatById(chatId, userID),
+            chatRepository.getGroupChatById(chatId, userID)
+        ]);
 
-        return await userRepository.withTransaction(async (client) => {
-            // First try to find individual chat
-            let chat = await chatRepository.getIndividualChatById(chatId, userID, client);
-
-            // If not found, try to find group chat
-            if (!chat) {
-                chat = await chatRepository.getGroupChatById(chatId, userID, client);
-
-                if (!chat) {
-                    throw new CustomError('Chat not found', 404);
-                }
-
-                return {
-                    chat_id: chat.group_chat_id,
-                    type: 'group',
-                    name: chat.name,
-                    description: chat.description,
-                    messages: chat.messages || [],
-                    created_at: chat.created_at
-                };
-            }
-
+        if (individualChat) {
             return {
-                chat_id: chat.individual_chat_id,
+                chat_id: individualChat.individual_chat_id,
                 type: 'individual',
-                participant1: chat.participant1,
-                participant2: chat.participant2,
-                messages: chat.messages || [],
-                created_at: chat.created_at
+                participant1: individualChat.participant1 ?? {},
+                participant2: individualChat.participant2 ?? {},
+                messages: individualChat.messages ?? [],
+                created_at: individualChat.created_at
             };
-        });
+        }
+
+        if (groupChat) {
+            return {
+                chat_id: groupChat.group_chat_id,
+                type: 'group',
+                name: groupChat.name ?? '',
+                description: groupChat.description ?? '',
+                members: groupChat.members ?? [],
+                messages: groupChat.messages ?? [],
+                created_at: groupChat.created_at
+            };
+        }
+
+        throw new CustomError('Chat not found', 404);
     }
 
     async updateChatWithMessage(chatId, senderID, message, messageID) {
@@ -170,7 +163,6 @@ class ChatService {
             if (!chat) {
                 throw new CustomError('Chat not found', 404);
             }
-
             const { type: chatType } = chat;
 
             const members = []

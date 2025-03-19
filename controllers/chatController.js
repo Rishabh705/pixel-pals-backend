@@ -13,9 +13,10 @@ class ChatController {
             const statusCode = result.created ? 201 : 200;
 
             return res.status(statusCode).json({
+                success: true,
                 message: result.created ? 'One-on-one chat created successfully' : 'Chat already exists',
                 data: result.data
-            }); 
+            });
         } catch (error) {
             // Pass the error to centralized error handler
             next(error);
@@ -34,6 +35,7 @@ class ChatController {
             const statusCode = result.created ? 201 : 200;
 
             return res.status(statusCode).json({
+                success: true,
                 message: result.created ? 'Group chat created successfully' : 'Chat already exists',
                 data: result.data
             });
@@ -50,6 +52,7 @@ class ChatController {
             const chats = await ChatService.getChats(userID);
 
             return res.status(200).json({
+                success: true,
                 message: 'User chats retrieved successfully',
                 data: chats
             });
@@ -58,27 +61,29 @@ class ChatController {
         }
     }
 
-    async getChat(req, res, next){
+    async getChat(req, res, next) {
         try {
             const { id } = req.params;
             const userID = req.user._id;
 
             const chat = await ChatService.getChat(id, userID);
-            
+
             // Format based on chat type
             if (chat.type === 'group') {
                 return res.status(200).json({
+                    success: true,
                     message: 'Group chat retrieved successfully',
                     data: chat
                 });
             } else {
                 return res.status(200).json({
+                    success: true,
                     message: 'Individual chat retrieved successfully',
                     data: chat
                 });
             }
         } catch (err) {
-           next(err);
+            next(err);
         }
     }
 
@@ -91,6 +96,7 @@ class ChatController {
             const result = await ChatService.updateChatWithMessage(id, senderID, message, messageID);
 
             return res.status(201).json({
+                success: true,
                 message: 'Chat updated successfully',
                 data: result
             });

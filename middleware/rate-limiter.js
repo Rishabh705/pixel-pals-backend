@@ -58,9 +58,11 @@ class RateLimiter {
             handler: (req, res) => {
                 const retryAfter = Math.ceil(windowMs / 1000 / 60);
                 res.status(429).json({
-                    error: options.message || 'Too many requests, please try again later.',
-                    retryAfter,
-                    retryAfterUnit: 'minutes'
+                    error: {
+                        message: options.message || 'Too many requests, please try again later.',
+                        retryAfter,
+                        retryAfterUnit: 'minutes'
+                    },
                 });
             }
         });
@@ -74,7 +76,7 @@ class RateLimiter {
         return this.createLimiter({
             prefix: 'auth',
             windowMs: 15 * 60 * 1000, // 15 minutes
-            max: 500, // 5 attempts
+            max: 5, // 5 attempts
             message: 'Too many login attempts, please try again later.'
         });
     }

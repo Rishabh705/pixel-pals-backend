@@ -74,7 +74,6 @@ io.on('connection', (socket) => {
             const receiverId = data.receiver._id;
     
             if (chatType === 'group') {
-                console.log(data);
                 socket.to(chatId).emit('receive-message', data);
             } 
             // Handle private chat

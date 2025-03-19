@@ -157,7 +157,7 @@ class ChatRepository {
     async findOneOnOneChatByMembers(participant1Id, participant2Id, client = pool) {
         const query = {
             text: `
-                SELECT *
+                SELECT _id
                 FROM IndividualChats
                 WHERE (participant1 = $1 AND participant2 = $2) OR
                         (participant1 = $2 AND participant2 = $1)
@@ -178,7 +178,7 @@ class ChatRepository {
                WITH new_group AS (
                     SELECT UNNEST($1::UUID[]) AS user_id
                 )
-                SELECT gc.*
+                SELECT gc._id
                 FROM GroupChats gc
                 JOIN (
                     SELECT groupchat_id
@@ -388,51 +388,55 @@ class ChatRepository {
                 gc._id AS group_chat_id,
                 gc.name,
                 gc.description,
-                jsonb_agg(
-                    jsonb_build_object(
-                        '_id', gcp.user_id,
-                        'username', u2.username,
-                        'avatar', u2.avatar
+                gc.created_at,
+                (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            '_id', u._id,
+                            'username', u.username,
+                            'avatar', u.avatar
+                        )
                     )
+                    FROM GroupChatParticipants gcp
+                    JOIN Users u ON gcp.user_id = u._id
+                    WHERE gcp.groupchat_id = gc._id
                 ) AS members,
-                jsonb_agg(
-                    jsonb_build_object(
-                        '_id', m2._id,
-                        'message', m2.message,
-                        'sender', jsonb_build_object(
-                            '_id', m2.sender,
-                            'username', u4.username,
-                            'avatar', u4.avatar
-                        ),
-                        'created_at', m2.created_at
+                (
+                    SELECT jsonb_agg(
+                        jsonb_build_object(
+                            '_id', m._id,
+                            'message', m.message,
+                            'sender', jsonb_build_object(
+                                '_id', u._id,
+                                'username', u.username,
+                                'avatar', u.avatar
+                            ),
+                            'created_at', m.created_at
+                        ) ORDER BY m.created_at ASC
                     )
-                ) AS messages,
-                gc.created_at AS created_at
+                    FROM GroupChatMessages gcm
+                    JOIN Messages m ON gcm.message_id = m._id
+                    JOIN Users u ON m.sender = u._id
+                    WHERE gcm.groupchat_id = gc._id
+                ) AS messages
             FROM GroupChats gc
-            LEFT JOIN GroupChatParticipants gcp ON gcp.groupchat_id = gc._id
-            LEFT JOIN GroupChatMessages gcm ON gcm.groupchat_id = gc._id
-            LEFT JOIN Messages m2 ON gcm.message_id = m2._id
-            LEFT JOIN Users u2 ON gcp.user_id = u2._id  -- Join to get participant details
-            LEFT JOIN Users u4 ON m2.sender = u4._id
             WHERE gc._id = $1
-            AND EXISTS (SELECT 1 FROM GroupChatParticipants gcp WHERE gcp.groupchat_id = gc._id AND gcp.user_id = $2)
-            GROUP BY
-                gc._id,
-                gc.name,
-                gc.description,
-                gc.created_at;
+            AND EXISTS (
+                SELECT 1 FROM GroupChatParticipants gcp 
+                WHERE gcp.groupchat_id = gc._id AND gcp.user_id = $2
+            )
             `,
             values: [chatId, userID]
-        };
+        };    
 
-        const { rows } = await client.query(query);
+        const { rows } = await client.query(query); 
         const chat = rows[0];
-
+ 
         // Cache the chat if found
         if (chat) {
             await cacheService.set(cacheKey, chat, this.GROUP_CHAT_CACHE_TTL);
         }
-
+        //TODO: should we cache the participants separately
         return chat;
     }
 

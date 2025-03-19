@@ -22,7 +22,7 @@ class AuthController {
             });
 
             res.status(200).json({
-                status: 'success',
+                success: true,
                 data: {
                     message: 'Authentication successful',
                     accessToken,
@@ -46,7 +46,7 @@ class AuthController {
             await authService.register(username, email, password, publicKey);
             
             res.status(201).json({
-                status: 'success',
+                success: true,
                 data: {
                     message: `User ${username} registered successfully`
                 }
@@ -69,7 +69,7 @@ class AuthController {
             });
             
             res.status(200).json({
-                status: 'success',
+                success: true,
                 data: {
                     message: 'Logout successful'
                 }
@@ -88,7 +88,7 @@ class AuthController {
             }
             const publicKey = await authService.getPublicKey(email);
             res.status(200).json({
-                status: 'success',
+                success: true,
                 data: {
                     publicKey
                 }
@@ -109,7 +109,7 @@ class AuthController {
             const { accessToken } = await authService.refreshAccessToken(refreshToken);
 
             res.status(200).json({
-                status: 'success',
+                success: true,
                 data: {
                     accessToken
                 }
@@ -137,7 +137,7 @@ class AuthController {
             });
 
             res.status(200).json({
-                status: 'success',
+                success: true,
                 data: {
                     accessToken
                 }
