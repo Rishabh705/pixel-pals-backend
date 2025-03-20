@@ -119,6 +119,7 @@ if (!fs.existsSync(logsDir)) {
   logger.info('Logs directory created');
 }
 
+app.set("trust proxy", 1);
 // Middleware for logging HTTP requests
 app.use(httpLogger);    
 
