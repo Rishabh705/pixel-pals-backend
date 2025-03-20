@@ -8,7 +8,7 @@ router.route('/')
 
 router.route('/:id')
     .get(chatController.getChat)
-    .put(chatController.updateChat);
+    .put(chatController.updateChatWithMessage);
 
 // Separate routes for creating one-on-one and group chats
 router.route('/one-on-one')
