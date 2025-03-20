@@ -156,3 +156,11 @@ app.get('/*', (req, res) => {
         });
     }
 }); 
+
+process.on('uncaughtException', (err) => {
+    logger.error('Uncaught exception:', err);
+});  
+  
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});

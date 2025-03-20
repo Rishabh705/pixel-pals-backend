@@ -1,30 +1,25 @@
 const rateLimit = require('express-rate-limit');
 const { RedisStore } = require('rate-limit-redis');
-const { createClient } = require('redis');
 const config = require('../config/configs');
 const {logger} = require('../middleware/logger');
+const cacheService = require('../utils/redis'); // Import the CacheService module
+
 class RateLimiter {
     constructor() {
-        this.redisClient = createClient({
-            socket: {
-                host: config.redis.host,
-                port: config.redis.port,
-            },
-        });
-
-        this.setupRedisConnection();
-    }
-
-    async setupRedisConnection() {
-        try {
-            await this.redisClient.connect();
-            logger.info('Rate limiter connected to Redis successfully');
-
-            this.redisClient.on('error', (error) => {
-                logger.error('Rate limiter Redis client error:', error);
+        // Reuse the Redis client from CacheService
+        this.redisClient = cacheService.client;
+        
+        // No need to establish a new connection as CacheService already handles this
+        // Just check if the client is ready
+        if (!this.redisClient.isReady) {
+            logger.info('Rate limiter waiting for Redis connection from CacheService');
+            
+            // Listen for the connect event if not already connected
+            this.redisClient.on('connect', () => {
+                logger.info('Rate limiter using shared Redis connection');
             });
-        } catch (error) {
-            logger.error('Failed to connect to Redis for rate limiting:', error);
+        } else {
+            logger.info('Rate limiter using existing Redis connection');
         }
     }
 
@@ -51,8 +46,8 @@ class RateLimiter {
                 error: options.message || 'Too many requests, please try again later.',
                 retryAfter: Math.ceil(windowMs / 1000 / 60), // minutes
             },
-            standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-            legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+            standardHeaders: true, // Return rate limit info in the RateLimit-* headers
+            legacyHeaders: false, // Disable the X-RateLimit-* headers
             ...config.rateLimit, // Apply any global rate limit configs
             ...options, // Allow overriding of any options
             handler: (req, res) => {
@@ -77,7 +72,7 @@ class RateLimiter {
             prefix: 'auth',
             windowMs: 15 * 60 * 1000, // 15 minutes
             max: 5, // 5 attempts
-            message: 'Too many login attempts, please try again later.'
+            message: 'Too many attempts, please try again later.'
         });
     }
 
@@ -92,13 +87,6 @@ class RateLimiter {
             max: 30, // 30 requests per minute
             message: 'API rate limit exceeded.'
         });
-    }
-
-    /**
-     * Close the Redis connection
-     */
-    async close() {
-        await this.redisClient.quit();
     }
 }
 

@@ -6,7 +6,11 @@ class CacheService {
         this.client = redis.createClient({
             url: config.redis.url,
             socket: {
-                reconnectStrategy: (retries) => Math.min(retries * 50, 2000) // Exponential backoff for retries
+                reconnectStrategy: (retries) => {
+                    const delay = Math.min(retries * 50, 5000);
+                    logger.info(`Attempting to reconnect to Redis in ${delay}ms (attempt ${retries})`);
+                    return delay;
+                }
             }
         });
 
