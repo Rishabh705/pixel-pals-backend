@@ -7,14 +7,14 @@ CREATE TABLE Users (
     password VARCHAR(255) NOT NULL,
     avatar VARCHAR(255) DEFAULT 'https://github.com/shadcn.png',
     refreshToken TEXT,
-    publicKey TEXT NOT NULL, -- Base64-encoded public key
+    publicKey TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE Messages (
     _id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    message TEXT NOT NULL, -- Storing the encrypted message
+    message TEXT NOT NULL,
     sender UUID REFERENCES Users(_id) ON DELETE CASCADE,
     chat_id UUID NOT NULL,
     chat_type VARCHAR(50) CHECK (chat_type IN ('individual', 'group')),
@@ -24,13 +24,13 @@ CREATE TABLE Messages (
 
 CREATE TABLE Keys (
     _id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    chat_id UUID NOT NULL, -- Refers to either individual or group chat
-    chat_type VARCHAR(50) CHECK (chat_type IN ('individual', 'group')), -- Chat type (individual/group)
-    user_id UUID REFERENCES Users(_id) ON DELETE CASCADE, -- The user for whom the AES key is encrypted
-    encrypted_aes_key TEXT NOT NULL, -- The AES key encrypted with the user's public key
+    chat_id UUID NOT NULL, 
+    chat_type VARCHAR(50) CHECK (chat_type IN ('individual', 'group')), 
+    user_id UUID REFERENCES Users(_id) ON DELETE CASCADE, 
+    encrypted_aes_key TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE (chat_id, chat_type, user_id) -- Ensure unique encrypted key for each user in a chat
+    UNIQUE (chat_id, chat_type, user_id) 
 );
 
 
@@ -110,7 +110,6 @@ CREATE TRIGGER enforce_chat_fk_trigger
 BEFORE INSERT OR UPDATE ON Messages
 FOR EACH ROW EXECUTE FUNCTION enforce_chat_fk();
 
--- Drop Individual Tables and its dependents
 DROP TABLE IF EXISTS IndividualChatMessages CASCADE;
 DROP TABLE IF EXISTS IndividualChats CASCADE;
 DROP TABLE IF EXISTS Messages CASCADE;
@@ -119,43 +118,29 @@ DROP TABLE IF EXISTS UserChats CASCADE;
 DROP TABLE IF EXISTS Keys CASCADE;
 DROP TABLE IF EXISTS Users CASCADE;
 
--- Drop Group Tables and its dependents
 DROP TABLE IF EXISTS GroupChatMessages CASCADE;
 DROP TABLE IF EXISTS GroupChatAdmins CASCADE;
 DROP TABLE IF EXISTS GroupChatParticipants CASCADE;
 DROP TABLE IF EXISTS GroupChats CASCADE;
 
--- Drop Enum Type
 DROP TYPE IF EXISTS CHATTYPE CASCADE;
 
 
--- Clear data from UserChats table
 TRUNCATE TABLE UserChats RESTART IDENTITY CASCADE;
 
--- Clear data from UserSavedContacts table
 TRUNCATE TABLE UserSavedContacts RESTART IDENTITY CASCADE;
 
--- Clear data from IndividualChatMessages table
 TRUNCATE TABLE IndividualChatMessages RESTART IDENTITY CASCADE;
 
--- Clear data from IndividualChats table
 TRUNCATE TABLE IndividualChats RESTART IDENTITY CASCADE;
 
--- Clear data from GroupChatMessages table
 TRUNCATE TABLE GroupChatMessages RESTART IDENTITY CASCADE;
 
--- Clear data from GroupChatAdmins table
-TRUNCATE TABLE GroupChatAdmins RESTART IDENTITY CASCADE;
-
--- Clear data from GroupChatParticipants table
 TRUNCATE TABLE GroupChatParticipants RESTART IDENTITY CASCADE;
 
--- Clear data from GroupChats table
 TRUNCATE TABLE GroupChats RESTART IDENTITY CASCADE;
 
--- Clear data from Messages table
 TRUNCATE TABLE Messages RESTART IDENTITY CASCADE;
 
--- Clear data from Users table
 TRUNCATE TABLE Keys RESTART IDENTITY CASCADE;
 TRUNCATE TABLE Users RESTART IDENTITY CASCADE;
