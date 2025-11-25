@@ -41,6 +41,9 @@ class RateLimiter {
                 prefix: `rate-limit:${options.prefix || 'default'}:`,
             }),
             windowMs,
+            keyGenerator: (req,res) => {
+                return req.user?._id || req.ip;
+            },
             max: options.max || 100, // Default 100 requests per windowMs
             message: {
                 error: options.message || 'Too many requests, please try again later.',
@@ -71,7 +74,7 @@ class RateLimiter {
         return this.createLimiter({
             prefix: 'auth',
             windowMs: 15 * 60 * 1000, // 15 minutes
-            max: 5, // 5 attempts
+            max: 10, // 5 attempts
             message: 'Too many attempts, please try again later.'
         });
     }

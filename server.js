@@ -13,7 +13,7 @@ const fs = require('fs');
 const errorHandler = require('./middleware/errorHandler');
 const cacheService = require('./utils/redis'); 
 const app = express();
-
+const throttle = require('lodash/throttle');
 const expressServer = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 // Enhanced Socket.IO configuration for stability
@@ -24,7 +24,7 @@ const io = new Server(expressServer, {
     pingTimeout: 60000,        // 60 seconds - wait time before considering connection dead
     pingInterval: 25000,       // 25 seconds - heartbeat frequency
     upgradeTimeout: 30000,     // 30 seconds - transport upgrade timeout
-    maxHttpBufferSize: 1e6,    // 1 MB - max message size
+    maxHttpBufferSize: 5e6,    // 1 MB - max message size
     transports: ['websocket', 'polling'],
     allowUpgrades: true
 });
@@ -56,9 +56,9 @@ io.on('connection', (socket) => {
     });
 
     // Drawing events
-    socket.on('drawing', data => {
+    socket.on('drawing', throttle((data) => {
         socket.to(data.chat_id).emit('drawing', data);
-    });
+    }, 16));
 
     // Join chat room and retrieve encryption key
     socket.on('join-chat', async (chat_id, userID) => {
